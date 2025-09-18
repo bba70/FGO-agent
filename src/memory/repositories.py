@@ -115,6 +115,14 @@ class MemoryDAL:
                 cursor.execute(sql, (user_id,))
                 return cursor.fetchone()[0]
             
+    def get_message_count(self, session_id: str) -> int:
+        """获取会话的消息总数"""
+        sql = "SELECT message_count FROM sessions WHERE session_id = %s"
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(sql, (session_id,))
+                return cursor.fetchone()[0]
+            
 
     
     
@@ -151,16 +159,16 @@ class MemoryDAL:
             
     # 对话相关
 
-    def add_conversation_turn(self, session_id: str, query: str, response: str, question_type: str, turn_number: int) -> None:
+    def add_conversation_turn(self, session_id: str, query: str, response: str, question_type: str, turn_number: int, token_count: int) -> None:
         """向 conversations 表插入一轮对话"""
         sql = """
             INSERT INTO conversations 
-            (session_id, query, response, question_type, turn_number) 
+            (session_id, query, response, question_type, turn_number, token_count) 
             VALUES (%s, %s, %s, %s, %s)
         """
         with get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(sql, (session_id, query, response, question_type, turn_number))
+                cursor.execute(sql, (session_id, query, response, question_type, turn_number, token_count))
             conn.commit()
 
     def get_next_turn_number(self, session_id: str) -> int:
@@ -225,11 +233,11 @@ class MemoryDAL:
                 return [Conversation.from_dict(row) for row in rows]
             
     # 摘要相关
-    def create_or_update_summary(self, session_id: str, summary_text: str, turn_number: int) -> bool:
+    def create_or_update_summary(self, session_id: str, summary_text: str, turn_number: int, token_count: int) -> bool:
         """创建或更新会话摘要"""
         current_time = datetime.now(timezone.utc)
         sql = """
-        INSERT INTO session_summaries (session_id, summary_text, turn_number, last_summary_time)
+        INSERT INTO session_summaries (session_id, summary_text, turn_number, last_summary_time, token_count)
         VALUES (%s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             summary_text = VALUES(summary_text),
@@ -238,7 +246,7 @@ class MemoryDAL:
         """
         with get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(sql, (session_id, summary_text, turn_number, current_time))
+                cursor.execute(sql, (session_id, summary_text, turn_number, current_time, token_count))
                 conn.commit()
                 return cursor.rowcount > 0
     
@@ -256,17 +264,17 @@ class MemoryDAL:
                     return SessionSummary.from_dict(row)
                 return None
     
-    def update_summary(self, session_id: str, summary_text: str, turn_number: int) -> bool:
+    def update_summary(self, session_id: str, summary_text: str, turn_number: int, token_count: int) -> bool:
         """更新会话摘要"""
         current_time = datetime.now(timezone.utc)
         sql = """
         UPDATE session_summaries 
-        SET summary_text = %s, turn_number = %s, last_summary_time = %s
+        SET summary_text = %s, turn_number = %s, last_summary_time = %s, token_count = %s
         WHERE session_id = %s
         """
         with get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(sql, (summary_text, turn_number, current_time, session_id))
+                cursor.execute(sql, (summary_text, turn_number, current_time, token_count, session_id))
                 conn.commit()
                 return cursor.rowcount > 0
     

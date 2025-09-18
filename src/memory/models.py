@@ -71,6 +71,7 @@ class Conversation:
     question_type: Optional[str] = None
     created_time: Optional[datetime] = None
     turn_number: int = 0
+    token_count: int = 0
     
     @classmethod
     def from_dict(cls, data: dict) -> 'Conversation':
@@ -82,7 +83,8 @@ class Conversation:
             ai_response=data.get('ai_response'),
             question_type=(data.get('question_type', 'general')),
             created_at=datetime.fromisoformat(data['created_at']) if data.get('created_at') else None,
-            turn_number=int(data.get('turn_number', 0))
+            turn_number=int(data.get('turn_number', 0)),
+            token_count=int(data.get('token_count', 0))
         )
     
     def to_dict(self) -> dict:
@@ -94,7 +96,8 @@ class Conversation:
             'response': self.response,
             'question_type': self.question_type.value if self.question_type else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
-            'turn_number': self.turn_number
+            'turn_number': self.turn_number,
+            'token_count': self.token_count
         }
     
 @dataclass
@@ -104,6 +107,7 @@ class SessionSummary:
     summary_text: str
     turn_number: int
     last_summary_time: Optional[datetime] = None
+    token_count: int = 0
     
     @classmethod
     def from_dict(cls, data: dict) -> 'SessionSummary':
@@ -112,7 +116,8 @@ class SessionSummary:
             session_id=data.get('session_id'),
             summary_text=data.get('summary_text'),
             turned_number=int(data.get('turned_number', 0)),
-            last_summary_time=datetime.fromisoformat(data['last_summary_time']) if data.get('last_summary_time') else None
+            last_summary_time=datetime.fromisoformat(data['last_summary_time']) if data.get('last_summary_time') else None,
+            token_count=int(data.get('token_count', 0))
         )
     
     def to_dict(self) -> dict:
@@ -121,5 +126,6 @@ class SessionSummary:
             'session_id': self.session_id,
             'summary_text': self.summary_text,
             'turned_number': self.turn_number,
-            'last_summary_time': self.last_summary_time.isoformat() if self.last_summary_time else None
+            'last_summary_time': self.last_summary_time.isoformat() if self.last_summary_time else None,
+            'token_count': self.token_count
         }
