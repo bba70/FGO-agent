@@ -1,0 +1,38 @@
+model_instances:
+  - name: qwen_chat_instance
+    type: qwen
+    api_key: env(DASHSCOPE_API_KEY)
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    
+  - name: ollama_chat_instance
+    type: ollama
+    base_url: "http://localhost:11434"
+    
+  - name: vllm_chat_instance
+    type: vllm
+    base_url: "http://localhost:8000/v1"
+
+  - name: ollama_embed_instance
+    type: ollama
+    base_url: "http://localhost:11434"
+
+  - name: qwen_embed_instance
+    type: qwen
+    api_key: env(DASHSCOPE_API_KEY)
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+
+models:
+  - name: "fgo-chat-model"
+    instances:
+      - qwen_chat_instance
+      - ollama_chat_instance 
+    instance_model_names:
+      qwen_chat_instance: "qwen-plus"
+      ollama_chat_instance: "deepseek-r1:1.5b"
+      
+  - name: "fgo-emded-model"
+    instances:
+      - qwen_embed_instance
+    instance_model_names:
+      qwen_embed_instance: "text-embedding-v4"
