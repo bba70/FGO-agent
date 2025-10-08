@@ -4,8 +4,8 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, Base
 from langchain.chat_models import init_chat_model
 import tiktoken
 
-from .repositories import MemoryDAL
-from models import User, Session, Conversation, SessionSummary
+from database.db.repositories import MemoryDAL
+from database.db.models import User, Session, Conversation, SessionSummary
 
 class MemoryManager:
     def __init__(self, max_length: int):

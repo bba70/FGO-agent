@@ -8,24 +8,24 @@ class User:
     '''用户实体'''
     user_id: str
     username: Optional[str] = None
-    create_time: Optional[datetime] = None
-    update_time: Optional[datetime] = None
+    create_at: Optional[datetime] = None
+    update_at: Optional[datetime] = None
 
     @classmethod
     def from_dict(cls, data: dict) -> 'User':
         return cls(
             user_id=data.get('user_id'),
             username=data.get('username'),
-            create_time=datetime.fromisoformat(data.get('create_time')) if data.get('create_time') else None,
-            update_time=datetime.fromisoformat(data.get('update_time')) if data.get('update_time') else None    
+            create_at=datetime.fromisoformat(data.get('create_at')) if data.get('create_at') else None,
+            update_at=datetime.fromisoformat(data.get('update_at')) if data.get('update_at') else None    
         )
 
     def to_dict(self) -> dict:
         return {
             "user_id": self.user_id,
             "username": self.username,
-            "create_time": self.create_time.isoformat() if self.create_time else None,
-            "update_time": self.update_time.isoformat() if self.update_time else None,
+            "create_at": self.create_at.isoformat() if self.create_at else None,
+            "update_at": self.update_at.isoformat() if self.update_at else None,
         }
     
 @dataclass
@@ -45,7 +45,7 @@ class Session:
             session_id=data.get('session_id'),
             user_id=data.get('user_id'),
             session_name=data.get('session_name'),
-            last_active=datetime.fromisoformat(data['last_active']) if data.get('last_active') else None,
+            last_active=data.get('last_active'), 
             is_active=int(data.get('is_active', 0)),
             message_count=int(data.get('message_count', 0))
         )
@@ -128,4 +128,87 @@ class SessionSummary:
             'turned_number': self.turn_number,
             'last_summary_time': self.last_summary_time.isoformat() if self.last_summary_time else None,
             'token_count': self.token_count
+        }
+    
+@dataclass
+class Models:
+    id: int                                     
+    instance_name: str 
+    type: str      
+    physical_model_name: str   
+    
+    base_url: Optional[str] = None  
+    create_at: Optional[datetime] = None      
+    
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Models':
+        return cls(
+            id=data.get('id'),
+            instance_name=data.get('instance_name'),
+            type=data.get('type'),
+            physical_model_name=data.get('physical_model_name'),
+            base_url=data.get('base_url'),
+            create_at=data.get('create_at') 
+        )
+    
+    def to_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'instance_name': self.instance_name,
+            'type': self.type,
+            'physical_model_name': self.physical_model_name,
+            'base_url': self.base_url,
+            'create_at': self.create_at.isoformat() if self.create_at else None
+        }
+    
+@dataclass
+class LogEntry:
+    id: int 
+    model_id: int   
+    logical_model: str      
+    type: str 
+    status: str                                
+    is_stream: bool = False                     
+    timestamp_start: Optional[datetime] = None  
+    timestamp_end: Optional[datetime] = None     
+    prompt_token: int = 0                       
+    completion_token: int = 0                    
+    error_message: Optional[str] = None         
+    failover_events: Optional[str] = None        
+    
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'LogEntry':
+        
+        return cls(
+            id=data.get('id'),
+            model_id=data.get('model_id'),
+            logical_model=data.get('logical_model'),
+            type=data.get('type'),
+            status=data.get('status'),
+            timestamp_start=data.get('timestamp_start'),
+            timestamp_end=data.get('timestamp_end'),
+            is_stream=bool(data.get('is_stream', False)),
+            prompt_token=int(data.get('prompt_token', 0)),
+            completion_token=int(data.get('completion_token', 0)),
+            error_message=data.get('error_message'),
+            failover_events=data.get('failover_events'),
+        )
+    
+    def to_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'model_id': self.model_id,
+            'logical_model': self.logical_model,
+            'type': self.type,
+            'status': self.status,
+            'is_stream': 1 if self.is_stream else 0, 
+            'timestamp_start': self.timestamp_start.isoformat() if self.timestamp_start else None,
+            'timestamp_end': self.timestamp_end.isoformat() if self.timestamp_end else None,
+            
+            'prompt_token': self.prompt_token,
+            'completion_token': self.completion_token,
+            'error_message': self.error_message,
+            'failover_events': self.failover_events,
         }
