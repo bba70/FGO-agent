@@ -1,16 +1,58 @@
 import yaml
 import os
-from typing import List, Dict, Any, Union, AsyncGenerator
+from typing import List, Dict, Any, Union, AsyncGenerator, Optional
 
 # 导入你所有的适配器和基类
-from adapter.base import BaseAdapter
-from adapter.qwen import QwenAdapter
-from adapter.ollama import OllamaAdapter
-from adapter.vllm import VLLMAdapter
+from llm.adapter.base import BaseAdapter
+from llm.adapter.qwen import QwenAdapter
+from llm.adapter.ollama import OllamaAdapter
+from llm.adapter.vllm import VLLMAdapter
+from llm.monitor_1 import monitor_llm_call
+
+
+class StreamWithMetadata:
+    """
+    包装异步生成器，支持在流式传输过程中动态设置和获取元数据
+    """
+    def __init__(self, generator: AsyncGenerator, instance_name: str = None, physical_model_name: str = None):
+        self._generator = generator
+        self.instance_name: Optional[str] = instance_name
+        self.physical_model_name: Optional[str] = physical_model_name
+        self._chunks = []  # 收集所有chunks用于token计数
+        self.failover_events: List[Dict[str, Any]] = []  # 容灾事件记录
+        
+    def __aiter__(self):
+        return self
+        
+    async def __anext__(self):
+        chunk = await self._generator.__anext__()
+        self._chunks.append(chunk)
+        return chunk
+    
+    def set_metadata(self, instance_name: str, physical_model_name: str):
+        """设置元数据"""
+        self.instance_name = instance_name
+        self.physical_model_name = physical_model_name
+    
+    def get_metadata(self) -> tuple[Optional[str], Optional[str]]:
+        """获取元数据"""
+        return self.instance_name, self.physical_model_name
+    
+    def get_chunks(self) -> List[Dict[str, Any]]:
+        """获取所有已接收的chunks"""
+        return self._chunks
+    
+    def add_failover_event(self, event: Dict[str, Any]):
+        """添加容灾事件"""
+        self.failover_events.append(event)
+    
+    def get_failover_events(self) -> List[Dict[str, Any]]:
+        """获取所有容灾事件"""
+        return self.failover_events
 
 class ModelRouter:
     """
-    模型路由器，是模型中台的核心。
+    模型路由器,是模型中台的核心。
     负责加载配置、管理适配器实例，并根据策略执行模型调用。
     """
     
@@ -28,7 +70,7 @@ class ModelRouter:
             self.config = yaml.safe_load(f)
         self.models = {model['name']: model for model in self.config['models']}
         self.instances = {inst['name']: inst for inst in self.config['model_instances']}
-        print("✅ 配置加载成功!")
+        print("配置加载成功!")
 
     def _create_adapters(self):
         """根据配置，创建所有需要的适配器实例并缓存。"""
@@ -57,15 +99,20 @@ class ModelRouter:
                 print(f"未知的适配器类型 '{config['type']}' for instance '{name}'")
         print("所有适配器创建完毕!")
 
+    @monitor_llm_call(type="chat")
     async def chat(
         self,
         messages: List[Dict[str, str]],
         model: str, # 这是逻辑模型名，如 "fgo-chat-model"
         stream: bool = False,
         **kwargs: Any
-    ) -> Union[Dict[str, Any], AsyncGenerator[Dict[str, Any], None]]:
+    ) -> Union[tuple[Dict[str, Any], str, str, List[Dict[str, Any]]], StreamWithMetadata]:
         """
         执行聊天请求的统一入口。
+        
+        Returns:
+            非流式: (result, instance_name, physical_model_name, failover_events)
+            流式: StreamWithMetadata 对象（包含元数据和容灾事件）
         """
         model_config = self.models.get(model)
         if not model_config:
@@ -75,40 +122,89 @@ class ModelRouter:
         
         last_exception = None
 
-
         if not stream:
+            # 非流式场景：记录容灾事件
+            failover_events = []
+            
             for instance_name in instance_names:
                 adapter = self.adapters.get(instance_name)
                 physical_model_name = model_config['instance_model_names'][instance_name]
                 
                 if not adapter:
                     print(f"找不到实例 '{instance_name}' 的适配器，跳过。")
+                    failover_events.append({
+                        "instance_name": instance_name,
+                        "status": "skipped",
+                        "reason": "适配器未找到"
+                    })
                     continue
                 
                 try:
-                    return await adapter.chat(messages, physical_model_name, stream, **kwargs)
+                    print(f"[非流式] 正在尝试实例 '{instance_name}'...")
+                    result = await adapter.chat(messages, physical_model_name, stream, **kwargs)
+                    
+                    # 成功，记录成功事件
+                    failover_events.append({
+                        "instance_name": instance_name,
+                        "physical_model_name": physical_model_name,
+                        "status": "success"
+                    })
+                    
+                    # 返回结果和容灾事件
+                    return result, instance_name, physical_model_name, failover_events
+                    
                 except Exception as e:
                     print(f"实例 '{instance_name}' 调用失败: {e}")
+                    failover_events.append({
+                        "instance_name": instance_name,
+                        "physical_model_name": physical_model_name,
+                        "status": "failed",
+                        "error": str(e)
+                    })
                     last_exception = e      
 
             raise Exception(f"所有实例均调用失败。最后一次错误: {last_exception}") from last_exception
         else:
-            async def stream_failover_generator():  # 使用内函数，因为一个函数不能既是普通函数又是生成函数
+            # 流式场景：使用闭包捕获元数据和容灾事件
+            metadata = {'instance_name': None, 'physical_model_name': None}
+            failover_events = []
+            
+            async def stream_failover_generator():
+                """内部生成器函数，实现故障转移逻辑"""
                 last_exception = None
                 
                 for instance_name in instance_names:
+                    adapter = self.adapters.get(instance_name)
+                    physical_model_name = model_config['instance_model_names'][instance_name]
+                    
+                    if not adapter:
+                        print(f"找不到实例 '{instance_name}' 的适配器，跳过。")
+                        failover_events.append({
+                            "instance_name": instance_name,
+                            "status": "skipped",
+                            "reason": "适配器未找到"
+                        })
+                        continue
+                    
                     try:
-                        adapter = self.adapters.get(instance_name)
-                        physical_model_name = model_config['instance_model_names'][instance_name]
-
                         print(f"[流式] 正在尝试实例 '{instance_name}'...")
                         
                         adapter_stream_generator = await adapter.chat(
                             messages, physical_model_name, stream=True, **kwargs
                         )
 
+                        # 成功获取生成器后，设置元数据到闭包变量
+                        metadata['instance_name'] = instance_name
+                        metadata['physical_model_name'] = physical_model_name
+                        
+                        # 记录成功事件
+                        failover_events.append({
+                            "instance_name": instance_name,
+                            "physical_model_name": physical_model_name,
+                            "status": "success"
+                        })
+                        
                         async for chunk in adapter_stream_generator:
-                            # 每成功获取一个 chunk，就立即将其转发给上游
                             yield chunk
                         
                         print(f"[流式] 实例 '{instance_name}' 传输完成。")
@@ -116,12 +212,22 @@ class ModelRouter:
                         
                     except Exception as e:
                         print(f"[流式] 实例 '{instance_name}' 调用失败: {e}")
+                        failover_events.append({
+                            "instance_name": instance_name,
+                            "physical_model_name": physical_model_name,
+                            "status": "failed",
+                            "error": str(e)
+                        })
                         last_exception = e
                 
                 raise Exception(f"所有流式实例均调用失败。最后一次错误: {last_exception}") from last_exception
 
-            return stream_failover_generator()
-        
+            # 创建包装对象，传入生成器
+            stream_wrapper = StreamWithMetadata(stream_failover_generator())
+            # 保存元数据字典和容灾事件列表的引用
+            stream_wrapper._metadata_dict = metadata
+            stream_wrapper._failover_events_list = failover_events
+            return stream_wrapper
 
 
     async def embed(

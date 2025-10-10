@@ -132,7 +132,7 @@ class SessionSummary:
     
 @dataclass
 class Models:
-    id: int                                     
+    id: str                                    
     instance_name: str 
     type: str      
     physical_model_name: str   
@@ -163,23 +163,23 @@ class Models:
         }
     
 @dataclass
-class LogEntry:
-    id: int 
-    model_id: int   
+class Logs:
+    id: str
     logical_model: str      
     type: str 
-    status: str                                
+    status: str    
+    prompt_token: int = 0                       
+    completion_token: int = 0
+    model_id: Optional[str] = None                     
     is_stream: bool = False                     
     timestamp_start: Optional[datetime] = None  
-    timestamp_end: Optional[datetime] = None     
-    prompt_token: int = 0                       
-    completion_token: int = 0                    
+    timestamp_end: Optional[datetime] = None                       
     error_message: Optional[str] = None         
     failover_events: Optional[str] = None        
     
 
     @classmethod
-    def from_dict(cls, data: dict) -> 'LogEntry':
+    def from_dict(cls, data: dict) -> 'Logs':
         
         return cls(
             id=data.get('id'),

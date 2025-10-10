@@ -4,7 +4,7 @@ import httpx
 import json
 from typing import AsyncGenerator, List, Dict, Any, Union
 
-from .base import BaseAdapter
+from llm.adapter.base import BaseAdapter
 
 class OllamaAdapter(BaseAdapter):
     """

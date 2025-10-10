@@ -2,7 +2,7 @@ import aiomysql
 import mysql.connector.pooling
 import os
 
-from config import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+from database.db.config import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 
 
 DB_CONFIG = {
@@ -10,7 +10,7 @@ DB_CONFIG = {
     "port": DB_PORT,
     "user": DB_USER,
     "password": DB_PASSWORD,
-    "database": DB_NAME
+    "db": DB_NAME
 }
 
 class DatabaseManager:

@@ -1,11 +1,11 @@
 from typing import List, Optional, Dict, Any
 from abc import ABC, abstractmethod
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
-from models import User, Session, Conversation, SessionSummary
+from database.db.models import User, Session, Conversation, SessionSummary
 
-from connection import  use_sync_connection
+from database.db.connection import  use_sync_connection
 
 
 class MemoryDAL:
@@ -259,10 +259,117 @@ class MemoryDAL:
         return cursor.rowcount > 0
     
 from .connection import use_async_connection
+from database.db.models import Models, Logs
 
 class LogDAL:
     '''所有和数据库相关的操作-日志模块'''
-    
+    @use_async_connection(dictionary_cursor=True)
+    async def get_or_create_model(self,cursor, model_data: Models):
+        """根据 Models 对象查找或创建模型记录，并返回其ID。"""
+
+
+        print("开始插入model")
+        # 1. 查找
+        await cursor.execute("SELECT id FROM models WHERE instance_name = %s", (model_data.instance_name,))
+        result = await cursor.fetchone()
+        if result:
+            return result['id']
+        
+        # 2. 创建
+        print(f"  - 在数据库中未找到模型 '{model_data.instance_name}'，正在创建...")
+
+
+        create_at = datetime.now(timezone.utc)
+        sql = "INSERT INTO models (id, instance_name, type, physical_model_name, base_url, create_at) VALUES (%s, %s, %s, %s, %s, %s)"
+        await cursor.execute(sql, (
+            model_data.id,
+            model_data.instance_name, 
+            model_data.type, 
+            model_data.physical_model_name, 
+            model_data.base_url,
+            create_at
+        ))
+
+    @use_async_connection()
+    async def save_log(self, cursor, log: Logs):
+        """
+        insert log
+        """
+        
+        # 1. 获取适合数据库的字典
+        #    to_db_dict 依然很有用，因为它处理了 bool, datetime, json 等类型的转换
+        log_dict = log.to_dict()
+
+
+        # 打印出来用于调试，确认内容
+        print('DEBUG - log_dict to be inserted:', log_dict)
+        
+        # 2. 构建简单的 INSERT SQL 语句
+        columns = ', '.join(f'`{key}`' for key in log_dict.keys())
+        placeholders = ', '.join(['%s'] * len(log_dict))
+        
+        sql = f"INSERT INTO logs ({columns}) VALUES ({placeholders})"
+        
+        # 3. 执行
+        try:
+            await cursor.execute(sql, tuple(log_dict.values()))
+            print(f"✅ 日志记录 {log.id} 已成功插入数据库。")
+        except Exception as e:
+            print(f"❌ 插入日志记录 {log.id} 时发生数据库错误: {e}")
+            raise
+
+    @use_async_connection(dictionary_cursor=True)
+    async def get_total_requests(self,cursor, time_delta: timedelta = timedelta(days=1)) -> int:
+        """获取指定时间范围内的总请求数。"""
+        start_time = datetime.utcnow() - time_delta
+        await cursor.execute("SELECT COUNT(id) as total FROM logs WHERE timestamp_start >= %s", (start_time,))
+        result = await cursor.fetchone()
+        return result['total'] if result else 0
+
+    @use_async_connection(dictionary_cursor=True)
+    async def get_token_usage_summary(self,cursor, time_delta: timedelta = timedelta(days=1)) -> List[Dict[str, Any]]:
+        """获取指定时间范围内，按模型分组的 Token 消耗统计。"""
+        start_time = datetime.utcnow() - time_delta
+        sql = """
+            SELECT 
+                m.physical_model_name, m.type as adapter_type,
+                SUM(l.prompt_token) as total_prompt_tokens,
+                SUM(l.completion_token) as total_completion_tokens,
+                COUNT(l.id) as request_count
+            FROM logs l JOIN models m ON l.model_id = m.id
+            WHERE l.timestamp_start >= %s AND l.status = 'success'
+            GROUP BY m.physical_model_name, m.type
+            ORDER BY total_prompt_tokens + total_completion_tokens DESC;
+        """
+        await cursor.execute(sql, (start_time,))
+        return await cursor.fetchall()
+
+    @use_async_connection(dictionary_cursor=True)
+    async def get_error_rate(self,cursor, time_delta: timedelta = timedelta(days=1)) -> float:
+        """计算指定时间范围内的错误率。"""
+        start_time = datetime.utcnow() - time_delta
+        sql = """
+            SELECT
+                COUNT(id) as total_count,
+                SUM(CASE WHEN status = 'failure' THEN 1 ELSE 0 END) as error_count
+            FROM logs WHERE timestamp_start >= %s;
+        """
+        await cursor.execute(sql, (start_time,))
+        result = await cursor.fetchone()
+        if not result or result['total_count'] == 0:
+            return 0.0
+        return (result['error_count'] / result['total_count']) * 100
+
+    @use_async_connection(dictionary_cursor=True)
+    async def get_recent_logs(self, cursor, limit: int = 20) -> List[Dict[str, Any]]:
+        """获取最近的日志记录。"""
+        sql = """
+            SELECT l.*, m.instance_name
+            FROM logs l LEFT JOIN models m ON l.model_id = m.id
+            ORDER BY l.timestamp_start DESC LIMIT %s;
+        """
+        await cursor.execute(sql, (limit,))
+        return await cursor.fetchall()
 
     
 

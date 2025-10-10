@@ -1,7 +1,7 @@
 from openai import AsyncOpenAI
 from typing import AsyncGenerator, List, Dict, Any, Union
 
-from .base import BaseAdapter
+from llm.adapter.base import BaseAdapter
 
 class VLLMAdapter(BaseAdapter):
     """

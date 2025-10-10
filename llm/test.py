@@ -1,5 +1,6 @@
 import asyncio
 import sys
+print(sys.path)
 
 from router import ModelRouter
 
