@@ -7,7 +7,7 @@ from llm.adapter.base import BaseAdapter
 from llm.adapter.qwen import QwenAdapter
 from llm.adapter.ollama import OllamaAdapter
 from llm.adapter.vllm import VLLMAdapter
-from llm.monitor_1 import monitor_llm_call
+from llm.monitor import monitor_llm_call
 
 
 class StreamWithMetadata:

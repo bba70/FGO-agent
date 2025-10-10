@@ -1,5 +1,3 @@
-# core/monitoring.py
-
 import time
 import uuid
 import logging
@@ -7,175 +5,193 @@ import json
 import traceback
 from datetime import datetime
 from functools import wraps
-from typing import Callable, Any, Coroutine, AsyncGenerator, Dict, List
+from typing import Callable, Any, Coroutine, AsyncGenerator, Dict, List, TYPE_CHECKING
 
-# 导入 DAL 和实体类
-# 确保你的项目结构中这些路径是正确的
+
+# 防止循环导入
+if TYPE_CHECKING:
+    from llm.router import ModelRouter
+else:
+    class ModelRouter: pass
+
 from database.db.repositories import LogDAL
-from database.db.models import Models, Logs
-# from llm.router import ModelRouter
+from database.db.models import Logs, Models
 
-# --- 初始化 ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [%(call_id)s] - %(message)s')
-logger = logging.getLogger("ModelCallMonitor")
-
-# 创建一个全局的 DAL 实例，供所有装饰器调用使用
 log_dal = LogDAL()
 
-# --- 装饰器工厂 ---
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-def monitor_llm_call(method_name: str):
-    """
-    一个装饰器工厂，用于拦截、监控并记录 ModelRouter 的方法调用。
-    """
+def monitor_llm_call(type: str):
     def decorator(func: Callable[..., Coroutine[Any, Any, Any]]):
-        
         @wraps(func)
         async def wrapper(self: 'ModelRouter', *args, **kwargs):
-            # --- 1. 前置拦截：调用开始 ---
-            
-            call_id = str(uuid.uuid4())
-            start_time = time.monotonic()
-            
-            log_adapter = logging.LoggerAdapter(logger, {'call_id': call_id})
-            
-            logical_model = kwargs.get('model') or (args[1] if len(args) > 1 else 'unknown')
-            is_stream = kwargs.get('stream', False)
 
-            # 创建并立即插入初始日志记录
-            initial_log = Logs(
-                id=call_id,
-                timestamp_start=datetime.utcnow(),
-                type=method_name,
-                logical_model=logical_model,
-                status="in_progress",
-                is_stream=is_stream,
-            )
-            # 初始时 model_id 可以为 None (如果数据库允许) 或一个虚拟ID
-            # 我们假设数据库允许为 NULL
-            await log_dal.save_log(initial_log)
-            log_adapter.info(f"开始执行 '{method_name}' for model '{logical_model}'")
-            
-            # 准备“信使”对象和 failover 日志列表
-            failover_events: List[Dict[str, Any]] = []
-            call_context = {
-                "successful_instance_name": None,
-                "physical_model_name": None,
-                "model_id": None,
-                "final_usage": None
-            }
-            
-            kwargs['__failover_log'] = failover_events
-            kwargs['__call_context'] = call_context
+            call_id = str(uuid.uuid4())
+            start_time = datetime.now() 
+
+            logical_model = kwargs.get('model')
+            is_stream = kwargs.get('stream', False)
             
             try:
-                # --- 2. 执行原始方法 (Router 的 chat 或 embed) ---
                 result = await func(self, *args, **kwargs)
+
+                # 导入 StreamWithMetadata（避免循环导入）
+                from llm.router import StreamWithMetadata
                 
-                # ---- 3. 拦截响应，后置处理 ----
-                if not is_stream:
-                    # **非流式**: result 是一个 dict
-                    instance_name = call_context["successful_instance_name"]
-                    physical_name = call_context["physical_model_name"]
-                    
-                    instance_config = self.instances.get(instance_name)
-                    model_obj = Models(
-                        instance_name=instance_name, type=instance_config.get('type'),
-                        physical_model_name=physical_name, base_url=instance_config.get('base_url')
-                    )
-                    model_id = await log_dal.get_or_create_model(model_obj)
-                    
-                    usage = result.get('usage', {})
-                    final_log_obj = Logs(
-                        id=call_id, model_id=model_id, status="success",
-                        prompt_token=usage.get('prompt_tokens', 0),
-                        completion_token=usage.get('completion_tokens', 0),
-                        failover_events=json.dumps(failover_events, ensure_ascii=False) if failover_events else None,
-                        timestamp_end=datetime.utcnow(),
-                    )
-                    await log_dal.save_log(final_log_obj)
-                    latency = (datetime.utcnow() - initial_log.timestamp_start).total_seconds() * 1000
-                    log_adapter.info(f"'{method_name}' 非流式成功。耗时: {latency:.2f}ms, 实例: {instance_name}")
-                    
-                    return result
-                
-                else:
-                    # **流式**: result 是一个 async generator, 我们需要包装它
-                    async def streaming_wrapper():
+                # 流式输出：返回 StreamWithMetadata 对象
+                if isinstance(result, StreamWithMetadata):
+                    # 创建包装生成器，在完成时记录日志
+                    async def stream_with_logging():
+                        """包装流式生成器，在完成后记录日志"""
                         try:
                             async for chunk in result:
                                 yield chunk
-                                if chunk.get('usage'):
-                                    call_context['final_usage'] = chunk['usage']
-                        
-                        except Exception as stream_exc:
-                            # 如果流消费失败
-                            instance_name = call_context.get("successful_instance_name")
-                            model_id = call_context.get("model_id")
-                            if instance_name and not model_id:
-                                # 尝试在失败时也获取 model_id
+                            
+                            # 流式传输完成，记录日志
+                            end_time = datetime.now()
+                            
+                            # 从闭包变量中获取元数据
+                            metadata_dict = getattr(result, '_metadata_dict', None)
+                            if metadata_dict:
+                                instance_name = metadata_dict.get('instance_name')
+                                physical_model_name = metadata_dict.get('physical_model_name')
+                            else:
+                                instance_name, physical_model_name = result.get_metadata()
+                            
+                            # 获取容灾事件
+                            failover_events_list = getattr(result, '_failover_events_list', None)
+                            failover_events_json = None
+                            if failover_events_list:
+                                failover_events_json = json.dumps(failover_events_list, ensure_ascii=False)
+                            
+                            if instance_name and physical_model_name:
                                 instance_config = self.instances.get(instance_name)
-                                model_obj = Models(...)
+                                model_id = str(uuid.uuid4())
+                                model_obj = Models(
+                                    id=model_id,
+                                    instance_name=instance_name,
+                                    physical_model_name=physical_model_name,
+                                    type=instance_config['type'],
+                                    base_url=instance_config.get('base_url', '')
+                                )
                                 model_id = await log_dal.get_or_create_model(model_obj)
-                            
-                            failure_log = Logs(
-                                id=call_id, model_id=model_id, status="failure",
-                                error_message=f"流式传输错误: {stream_exc}\n{traceback.format_exc()}",
-                                failover_events=json.dumps(failover_events, ensure_ascii=False) if failover_events else None,
-                                timestamp_end=datetime.utcnow(),
-                            )
-                            await log_dal.save_log(failure_log)
-                            log_adapter.error(f"'{method_name}' 流式传输失败。")
-                            raise
-                        
-                        else:
-                            # 如果流正常结束
-                            instance_name = call_context["successful_instance_name"]
-                            physical_name = call_context["physical_model_name"]
-
-                            print('instance_name', instance_name)
                                 
-                            print('physical_name', physical_name)
-                            
-                            instance_config = self.instances.get(instance_name)
-                            model_obj = Models(
-                                instance_name=instance_name, type=instance_config.get('type'),
-                                physical_model_name=physical_name, base_url=instance_config.get('base_url')
-                            )
-                            model_id = await log_dal.get_or_create_model(model_obj)
-                            
-                            usage = call_context.get('final_usage', {})
-                            success_log = Logs(
-                                id=call_id, model_id=model_id, status="success",
-                                prompt_token=usage.get('prompt_tokens', 0),
-                                completion_token=usage.get('completion_tokens', 0),
-                                failover_events=json.dumps(failover_events, ensure_ascii=False) if failover_events else None,
-                                timestamp_end=datetime.utcnow(),
-                            )
-                            await log_dal.save_log(success_log)
-                            latency = (datetime.utcnow() - initial_log.timestamp_start).total_seconds() * 1000
-                            log_adapter.info(f"'{method_name}' 流式成功。耗时: {latency:.2f}ms, 实例: {instance_name}")
-
-                    return streaming_wrapper()
+                                # 计算 token（从 chunks 中提取）
+                                chunks = result.get_chunks()
+                                prompt_tokens = 0
+                                completion_tokens = 0
+                                
+                                # 尝试从最后一个 chunk 获取 usage 信息（更健壮的处理）
+                                if chunks:
+                                    # 从后往前找，找到第一个包含 usage 的 chunk
+                                    for chunk in reversed(chunks):
+                                        if chunk and isinstance(chunk, dict):
+                                            usage = chunk.get('usage')
+                                            if usage and isinstance(usage, dict):
+                                                prompt_tokens = usage.get('prompt_tokens', 0)
+                                                completion_tokens = usage.get('completion_tokens', 0)
+                                                break
+                                
+                                log_obj = Logs(
+                                    id=call_id,
+                                    model_id=model_id,
+                                    status="success",
+                                    type=type,
+                                    logical_model=logical_model,
+                                    timestamp_start=start_time,
+                                    timestamp_end=end_time,
+                                    is_stream=True,
+                                    prompt_token=prompt_tokens,
+                                    completion_token=completion_tokens,
+                                    failover_events=failover_events_json, 
+                                )
+                                await log_dal.save_log(log_obj)
+                                logger.info(f"✅ 流式调用成功: {instance_name} - {physical_model_name} (tokens: {prompt_tokens}/{completion_tokens})")
+                                if failover_events_list and len(failover_events_list) > 1:
+                                    logger.info(f"容灾信息: 尝试了 {len(failover_events_list)} 个实例")
+                            else:
+                                logger.warning("流式传输完成，但未获取到元数据")
+                                
+                        except Exception as stream_error:
+                            logger.error(f"流式传输失败: {stream_error}")
+                            raise
+                    
+                    # 返回新的包装生成器，但保持 StreamWithMetadata 类型
+                    wrapped_stream = StreamWithMetadata(stream_with_logging())
+                    # 复制元数据和容灾事件引用
+                    if hasattr(result, '_metadata_dict'):
+                        wrapped_stream._metadata_dict = result._metadata_dict
+                    if hasattr(result, '_failover_events_list'):
+                        wrapped_stream._failover_events_list = result._failover_events_list
+                    return wrapped_stream
+                
+                # 非流式输出：返回 (result, instance_name, physical_model_name, failover_events) 元组
+                else:
+                    response_data, instance_name, physical_model_name, failover_events = result
+                    end_time = datetime.now()
+                    
+                    # 转换容灾事件为 JSON
+                    failover_events_json = None
+                    if failover_events:
+                        failover_events_json = json.dumps(failover_events, ensure_ascii=False)
+                    
+                    instance_config = self.instances.get(instance_name)
+                    model_id = str(uuid.uuid4())
+                    model_obj = Models(
+                        id=model_id,
+                        instance_name=instance_name,
+                        physical_model_name=physical_model_name,
+                        type=instance_config['type'],
+                        base_url=instance_config.get('base_url', '')
+                    )
+                    model_id = await log_dal.get_or_create_model(model_obj)
+                    
+                    # 安全地获取 token 信息
+                    usage = response_data.get('usage', {}) if isinstance(response_data, dict) else {}
+                    prompt_tokens = usage.get('prompt_tokens', 0) if isinstance(usage, dict) else 0
+                    completion_tokens = usage.get('completion_tokens', 0) if isinstance(usage, dict) else 0
+                    
+                    log_obj = Logs(
+                        id=call_id,
+                        model_id=model_id,
+                        status="success",
+                        type=type,
+                        logical_model=logical_model,
+                        timestamp_start=start_time,
+                        timestamp_end=end_time,
+                        is_stream=False,
+                        prompt_token=prompt_tokens,
+                        completion_token=completion_tokens,
+                        failover_events=failover_events_json,
+                    )
+                    await log_dal.save_log(log_obj)
+                    logger.info(f"非流式调用成功: {instance_name} - {physical_model_name} (tokens: {prompt_tokens}/{completion_tokens})")
+                    if failover_events and len(failover_events) > 1:
+                        logger.info(f"容灾信息: 尝试了 {len(failover_events)} 个实例")
+                    
+                    return result  # 返回原始的 tuple
 
             except Exception as e:
-                # 捕获 `func` 直接抛出的异常 (所有 failover 都失败)
+                # 全部失败
+                end_time = datetime.now()
                 failure_log = Logs(
                     id=call_id,
+                    model_id='failure',
                     status="failure",
-
                     logical_model=logical_model,
-                    type=method_name,
-                    is_stream=is_stream,  
-
+                    timestamp_start=start_time,
+                    timestamp_end=end_time,
+                    type=type,
+                    is_stream=is_stream,
                     error_message=f"所有实例均失败: {e}\n{traceback.format_exc()}",
-                    failover_events=json.dumps(failover_events, ensure_ascii=False) if failover_events else None,
-                    timestamp_end=datetime.utcnow(),
                 )
-                # 此时 model_id 为 None (或虚拟ID)，是合理的
                 await log_dal.save_log(failure_log)
-                log_adapter.error(f"'{method_name}' 执行失败，所有实例均不可用。")
+                logger.error(f"调用失败: {e}")
                 raise
-        
+
         return wrapper
+
     return decorator
+
