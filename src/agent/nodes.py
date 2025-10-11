@@ -32,10 +32,10 @@ def rag_evaluation_node(state: AgentState) -> Dict[str, Any]:
     RAG 评估节点，评估检索结果的质量。
     
     评估结果：
-    - "pass": 检索结果良好，继续到汇总节点
+    - "pass": 检索结果良好，进入 LLM 生成节点
     - "rewrite": 检索结果不佳且未超过重试次数，改写查询回到分类节点
     
-    注意：如果重试次数已达上限，即使质量不佳也返回 "pass" 进入汇总节点
+    注意：如果重试次数已达上限，即使质量不佳也返回 "pass"
     
     Returns:
         更新 evaluation_result, retrieval_score, retry_count
@@ -43,24 +43,32 @@ def rag_evaluation_node(state: AgentState) -> Dict[str, Any]:
     pass
 
 
-def web_search_node(state: AgentState) -> Dict[str, Any]:
+def llm_generate_node(state: AgentState) -> Dict[str, Any]:
     """
-    网络搜索节点，处理需要实时信息的查询。
-    
-    Returns:
-        更新 search_results
-    """
-    pass
-
-
-def summarize_node(state: AgentState) -> Dict[str, Any]:
-    """
-    汇总节点，将 RAG 或 Web Search 的结果整合成最终答案。
+    LLM 生成节点，基于 RAG 检索的文档生成最终答案。
     
     关键：清理所有中间状态，只保留最终的 messages
     
     Returns:
         更新 messages（添加 AI 回复），清理所有中间状态字段
+    """
+    pass
+
+
+def web_search_node(state: AgentState) -> Dict[str, Any]:
+    """
+    网络搜索节点，LLM 调用 MCP 工具进行搜索并生成答案。
+    
+    流程：
+    1. LLM 接收用户查询
+    2. LLM 决定调用 web_search MCP 工具
+    3. 获取搜索结果
+    4. LLM 基于搜索结果生成最终答案
+    
+    关键：此节点内部完成搜索和答案生成，直接输出最终答案
+    
+    Returns:
+        更新 messages（添加 AI 回复），清理中间状态
     """
     pass
 
@@ -73,5 +81,9 @@ def end_node(state: AgentState) -> Dict[str, Any]:
         更新 messages，清理中间状态
     """
     return {
-        "messages": [AIMessage(content="如有其他问题，请随时询问！")]
+        "messages": [AIMessage(content="如有其他问题，请随时询问！")],
+        # 清理中间状态
+        "query_classification": None,
+        "retry_count": None,
+        "original_query": None,
     }

@@ -32,13 +32,6 @@ class AgentState(InputState):
         retrieved_docs: RAG 检索到的文档
         retrieval_score: 检索质量分数
         evaluation_result: 评估结果（pass/rewrite）
-        
-        # Web Search 相关中间状态
-        search_results: 网络搜索结果
-        
-        # 最终答案相关
-        raw_answer: 工具节点返回的原始答案
-        final_answer: 汇总节点生成的最终答案
     """
     # 路由和控制字段
     query_classification: Optional[Literal["knowledge_base", "web_search", "end"]]
@@ -52,13 +45,6 @@ class AgentState(InputState):
     retrieved_docs: Optional[List[Dict[str, Any]]]
     retrieval_score: Optional[float]
     evaluation_result: Optional[Literal["pass", "rewrite"]]
-    
-    # Web Search 中间状态
-    search_results: Optional[List[Dict[str, Any]]]
-    
-    # 答案字段
-    raw_answer: Optional[str]
-    final_answer: Optional[str]
 
 
 # --- 第三部分：定义输出状态（清理后的状态）---

@@ -60,9 +60,7 @@ def route_after_evaluation(state: AgentState) -> str:
         return "summarize"
 
 
-# ============================================================================
 # 创建图
-# ============================================================================
 
 def create_game_character_graph():
     """
@@ -86,7 +84,6 @@ def create_game_character_graph():
         input_schema=InputState
     )
     
-    # === 添加节点 ===
     workflow.add_node("query_classify", query_classify_node)
     workflow.add_node("knowledge_base", knowledge_base_node)
     workflow.add_node("rag_evaluation", rag_evaluation_node)
@@ -94,7 +91,6 @@ def create_game_character_graph():
     workflow.add_node("summarize", summarize_node)
     workflow.add_node("end", end_node)
     
-    # === 添加边 ===
     
     # 1. 入口边：从 START 到查询分类节点
     workflow.add_edge(START, "query_classify")
@@ -124,8 +120,6 @@ def create_game_character_graph():
         }
     )
     
-    # 5. 网络搜索节点 -> 汇总节点（固定边）
-    workflow.add_edge("web_search", "summarize")
     
     # 6. 汇总节点 -> END（固定边）
     workflow.add_edge("summarize", END)
@@ -137,13 +131,9 @@ def create_game_character_graph():
     return workflow.compile()
 
 
-# === 导出编译好的图 ===
 game_character_graph = create_game_character_graph()
 
 
-# ============================================================================
-# 辅助函数
-# ============================================================================
 
 def visualize_graph():
     """
