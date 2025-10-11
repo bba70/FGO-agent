@@ -1,8 +1,7 @@
-from typing import TypedDict, Annotated, Sequence, Any, Literal
+from typing import TypedDict, Annotated, Sequence, Any, Literal, Optional, List, Dict
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph import add_messages
-from typing import Optional
 
 # --- 第一部分：定义图的公共入口 (API) ---
 
@@ -21,13 +20,52 @@ class AgentState(InputState):
     代表 Agent 内部流转的完整状态，继承自 InputState。
     
     Attributes:
-        messages: 继承自 InputState，追踪完整的对话历史。
-        query_classification: 存储查询分类节点的结果，用于条件路由。
-        tool_output: 存储工具执行节点返回的原始数据，作为答案合成节点的上下文。
+        messages: 继承自 InputState，追踪完整的对话历史（最终状态）
+        
+        # 以下为中间状态字段，仅在图遍历过程中使用，不会保留到最终状态
+        query_classification: 查询分类结果（knowledge_base/web_search/end）
+        retry_count: 重试次数（防止无限循环）
+        original_query: 原始查询（用于改写时参考）
+        rewritten_query: 改写后的查询
+        
+        # RAG 相关中间状态
+        retrieved_docs: RAG 检索到的文档
+        retrieval_score: 检索质量分数
+        evaluation_result: 评估结果（pass/rewrite）
+        
+        # Web Search 相关中间状态
+        search_results: 网络搜索结果
+        
+        # 最终答案相关
+        raw_answer: 工具节点返回的原始答案
+        final_answer: 汇总节点生成的最终答案
     """
-    # 路由指令：存放分类节点的决策结果
-    query_classification: Literal["knowledge_base", "web_search", "end"]
-    # 工具参数
-    tool_input: Optional[dict]
-    # 工具调用结果
-    tool_result = Optional[dict]
+    # 路由和控制字段
+    query_classification: Optional[Literal["knowledge_base", "web_search", "end"]]
+    retry_count: Optional[int]
+    
+    # 查询改写字段
+    original_query: Optional[str]
+    rewritten_query: Optional[str]
+    
+    # RAG 中间状态
+    retrieved_docs: Optional[List[Dict[str, Any]]]
+    retrieval_score: Optional[float]
+    evaluation_result: Optional[Literal["pass", "rewrite"]]
+    
+    # Web Search 中间状态
+    search_results: Optional[List[Dict[str, Any]]]
+    
+    # 答案字段
+    raw_answer: Optional[str]
+    final_answer: Optional[str]
+
+
+# --- 第三部分：定义输出状态（清理后的状态）---
+
+class OutputState(TypedDict):
+    """
+    定义图的最终输出状态，只包含必要的对话历史。
+    中间状态字段会被清理，不会返回给调用者。
+    """
+    messages: Annotated[Sequence[AnyMessage], add_messages]

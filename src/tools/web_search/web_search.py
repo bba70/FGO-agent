@@ -1,15 +1,3 @@
-# === requirements.txt ===
-"""
-mcp>=1.0.0
-httpx>=0.27.0
-beautifulsoup4>=4.12.0
-readability-lxml>=0.8.1
-tiktoken>=0.5.0
-trafilatura>=1.6.0
-newspaper3k>=0.2.8
-python-dotenv>=1.0.0
-"""
-
 # === .env 配置文件 ===
 """
 # 搜索配置
@@ -23,16 +11,15 @@ GOOGLE_API_KEY=your_google_api_key
 GOOGLE_CX=your_google_cx
 """
 
-# === web_search_mcp.py ===
+# === web_search_fastmcp.py ===
 
 import asyncio
 import os
 import logging
 import re
-from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime
-from urllib.parse import urljoin, urlparse
+from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -42,9 +29,7 @@ import trafilatura
 from newspaper import Article
 from dotenv import load_dotenv
 
-from mcp.server.models import InitializationOptions
-from mcp.server import Server
-from mcp.types import Tool, TextContent
+from fastmcp import FastMCP
 
 # 加载环境变量
 load_dotenv()
@@ -52,6 +37,7 @@ load_dotenv()
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("web-search-mcp")
+
 
 @dataclass
 class SearchResult:
@@ -73,8 +59,10 @@ class ExtractedContent:
     token_count: int
     quality_score: float
 
-class WebSearchMCP:
-    """网络搜索MCP工具核心类"""
+
+
+class WebSearchTool:
+    """网络搜索工具核心类"""
     
     def __init__(self):
         self.max_results = int(os.getenv("MAX_SEARCH_RESULTS", "5"))
@@ -388,7 +376,7 @@ class WebSearchMCP:
         
         return (length_score * 0.6 + density_score * 0.4)
     
-    def _optimize_content_for_llm(self, extracted_contents: List[ExtractedContent], query: str) -> str:
+    def optimize_content_for_llm(self, extracted_contents: List[ExtractedContent], query: str) -> str:
         """优化内容长度以适应LLM"""
         if not extracted_contents:
             return f"未找到关于 '{query}' 的相关内容。"
@@ -421,12 +409,12 @@ class WebSearchMCP:
                 tokens = self.tokenizer.encode(content_text)
                 truncated_tokens = tokens[:source_budget - 10]  # 预留"..."的token
                 content_text = self.tokenizer.decode(truncated_tokens) + "..."
-                
-                source_info = f"""
-                            【来源 {i+1}】{content.title}
-                            链接：{content.url}
-                            内容：{content_text}
-                            """
+            
+            source_info = f"""
+【来源 {i+1}】{content.title}
+链接：{content.url}
+内容：{content_text}
+"""
             
             source_tokens = len(self.tokenizer.encode(source_info))
             if used_tokens + source_tokens <= available_tokens:
@@ -444,217 +432,145 @@ class WebSearchMCP:
         """关闭资源"""
         await self.http_client.aclose()
 
-# === MCP服务器实现 ===
+
+
 
 # 创建全局工具实例
-web_search_tool = WebSearchMCP()
+web_search_tool = WebSearchTool()
 
-# 创建MCP服务器
-server = Server("web-search-mcp")
+mcp = FastMCP("web-search-mcp")
 
-@server.list_tools()
-async def handle_list_tools() -> List[Tool]:
-    """列出所有可用工具"""
-    return [
-        Tool(
-            name="search_web",
-            description="在网络上搜索信息并返回搜索结果",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "搜索查询词",
-                        "minLength": 1,
-                        "maxLength": 200
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "最大搜索结果数量",
-                        "default": 5,
-                        "minimum": 1,
-                        "maximum": 10
-                    }
-                },
-                "required": ["query"],
-                "additionalProperties": False
-            }
-        ),
-        Tool(
-            name="extract_webpage",
-            description="提取指定网页的详细内容",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "要提取内容的网页URL",
-                        "format": "uri"
-                    }
-                },
-                "required": ["url"],
-                "additionalProperties": False
-            }
-        ),
-        Tool(
-            name="search_and_extract",
-            description="搜索并自动提取网页内容，返回优化后的信息",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "搜索查询词",
-                        "minLength": 1,
-                        "maxLength": 200
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "最大搜索结果数量",
-                        "default": 5,
-                        "minimum": 1,
-                        "maximum": 8
-                    },
-                    "extract_count": {
-                        "type": "integer",
-                        "description": "提取详细内容的网页数量",
-                        "default": 3,
-                        "minimum": 1,
-                        "maximum": 5
-                    }
-                },
-                "required": ["query"],
-                "additionalProperties": False
-            }
+
+@mcp.tool()
+async def search_web(query: str, max_results: int = 5) -> str:
+    """
+    在网络上搜索信息并返回搜索结果
+    
+    Args:
+        query: 搜索查询词（必填）
+        max_results: 最大搜索结果数量，默认5，范围1-10
+    
+    Returns:
+        格式化的搜索结果字符串
+    """
+    if not query or not query.strip():
+        return "错误: 搜索查询不能为空"
+    
+    if not (1 <= max_results <= 10):
+        max_results = 5
+    
+    search_results = await web_search_tool.search_web(query.strip(), max_results)
+    
+    if not search_results:
+        return f"未找到关于 '{query}' 的搜索结果"
+    
+    # 格式化搜索结果
+    formatted_results = [f"🔍 搜索查询: {query}\n"]
+    for result in search_results:
+        formatted_results.append(
+            f"{result.rank}. **{result.title}**\n"
+            f"   🔗 {result.url}\n"
+            f"   📄 {result.snippet}\n"
+            f"   📊 来源: {result.source}\n"
         )
-    ]
-
-@server.call_tool()
-async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
-    """处理工具调用"""
-    try:
-        if name == "search_web":
-            query = arguments.get("query", "").strip()
-            max_results = arguments.get("max_results", 5)
-            
-            if not query:
-                return [TextContent(type="text", text="错误: 搜索查询不能为空")]
-            
-            search_results = await web_search_tool.search_web(query, max_results)
-            
-            if not search_results:
-                return [TextContent(type="text", text=f"未找到关于 '{query}' 的搜索结果")]
-            
-            # 格式化搜索结果
-            formatted_results = [f"🔍 搜索查询: {query}\n"]
-            for result in search_results:
-                formatted_results.append(
-                    f"{result.rank}. **{result.title}**\n"
-                    f"   🔗 {result.url}\n"
-                    f"   📄 {result.snippet}\n"
-                    f"   📊 来源: {result.source}\n"
-                )
-            
-            return [TextContent(type="text", text="\n".join(formatted_results))]
-        
-        elif name == "extract_webpage":
-            url = arguments.get("url", "").strip()
-            
-            if not url:
-                return [TextContent(type="text", text="错误: URL不能为空")]
-            
-            extracted_content = await web_search_tool.extract_content(url)
-            
-            if not extracted_content:
-                return [TextContent(type="text", text=f"无法提取网页内容: {url}")]
-            
-            response = f"""📄 网页内容提取结果
-
-                            🔗 URL: {extracted_content.url}
-                            📝 标题: {extracted_content.title}
-                            🔧 提取方法: {extracted_content.extraction_method}
-                            📊 质量评分: {extracted_content.quality_score:.2f}
-                            🎯 Token数量: {extracted_content.token_count}
-
-                            📋 内容摘要:
-                            {extracted_content.summary}
-
-                            📖 完整内容:
-                            {extracted_content.content}
-                            """
-            
-            return [TextContent(type="text", text=response)]
-        
-        elif name == "search_and_extract":
-            query = arguments.get("query", "").strip()
-            max_results = arguments.get("max_results", 5)
-            extract_count = arguments.get("extract_count", 3)
-            
-            if not query:
-                return [TextContent(type="text", text="错误: 搜索查询不能为空")]
-            
-            # 执行搜索
-            search_results = await web_search_tool.search_web(query, max_results)
-            
-            if not search_results:
-                return [TextContent(type="text", text=f"未找到关于 '{query}' 的搜索结果")]
-            
-            # 提取内容
-            urls_to_extract = [result.url for result in search_results[:extract_count]]
-            extracted_contents = []
-            
-            for url in urls_to_extract:
-                try:
-                    content = await web_search_tool.extract_content(url)
-                    if content:
-                        extracted_contents.append(content)
-                except Exception as e:
-                    logger.warning(f"提取内容失败 {url}: {e}")
-            
-            if not extracted_contents:
-                # 如果没有提取到内容，返回搜索结果
-                formatted_results = [f"🔍 搜索结果 (未能提取详细内容): {query}\n"]
-                for result in search_results:
-                    formatted_results.append(
-                        f"{result.rank}. {result.title}\n   {result.snippet}\n   {result.url}\n"
-                    )
-                return [TextContent(type="text", text="\n".join(formatted_results))]
-            
-            # 优化内容
-            optimized_content = web_search_tool._optimize_content_for_llm(extracted_contents, query)
-            
-            return [TextContent(type="text", text=optimized_content)]
-        
-        else:
-            return [TextContent(type="text", text=f"错误: 未知的工具名称 '{name}'")]
     
-    except Exception as e:
-        logger.error(f"工具执行失败: {e}")
-        return [TextContent(type="text", text=f"工具执行错误: {str(e)}")]
+    return "\n".join(formatted_results)
 
-async def main():
-    """MCP服务器主函数"""
-    try:
-        logger.info("Web Search MCP Server 启动中...")
-        
-        import mcp.server.stdio
-        
-        async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
-            await server.run(
-                read_stream,
-                write_stream,
-                InitializationOptions(
-                    server_name="web-search-mcp",
-                    server_version="1.0.0"
-                )
+
+@mcp.tool()
+async def extract_webpage(url: str) -> str:
+    """
+    提取指定网页的详细内容
+    
+    Args:
+        url: 要提取内容的网页URL（必填）
+    
+    Returns:
+        提取的网页内容，包括标题、摘要和完整内容
+    """
+    if not url or not url.strip():
+        return "错误: URL不能为空"
+    
+    extracted_content = await web_search_tool.extract_content(url.strip())
+    
+    if not extracted_content:
+        return f"无法提取网页内容: {url}"
+    
+    response = f"""📄 网页内容提取结果
+
+🔗 URL: {extracted_content.url}
+📝 标题: {extracted_content.title}
+🔧 提取方法: {extracted_content.extraction_method}
+📊 质量评分: {extracted_content.quality_score:.2f}
+🎯 Token数量: {extracted_content.token_count}
+
+📋 内容摘要:
+{extracted_content.summary}
+
+📖 完整内容:
+{extracted_content.content}
+"""
+    
+    return response
+
+
+@mcp.tool()
+async def search_and_extract(
+    query: str, 
+    max_results: int = 5, 
+    extract_count: int = 3
+) -> str:
+    """
+    搜索并自动提取网页内容，返回优化后的信息（推荐使用）
+    
+    Args:
+        query: 搜索查询词（必填）
+        max_results: 最大搜索结果数量，默认5，范围1-8
+        extract_count: 提取详细内容的网页数量，默认3，范围1-5
+    
+    Returns:
+        优化后的综合信息，适合LLM处理
+    """
+    if not query or not query.strip():
+        return "错误: 搜索查询不能为空"
+    
+    # 参数验证
+    max_results = max(1, min(max_results, 8))
+    extract_count = max(1, min(extract_count, 5))
+    
+    # 执行搜索
+    search_results = await web_search_tool.search_web(query.strip(), max_results)
+    
+    if not search_results:
+        return f"未找到关于 '{query}' 的搜索结果"
+    
+    # 提取内容
+    urls_to_extract = [result.url for result in search_results[:extract_count]]
+    extracted_contents = []
+    
+    for url in urls_to_extract:
+        try:
+            content = await web_search_tool.extract_content(url)
+            if content:
+                extracted_contents.append(content)
+        except Exception as e:
+            logger.warning(f"提取内容失败 {url}: {e}")
+    
+    if not extracted_contents:
+        # 如果没有提取到内容，返回搜索结果
+        formatted_results = [f"🔍 搜索结果 (未能提取详细内容): {query}\n"]
+        for result in search_results:
+            formatted_results.append(
+                f"{result.rank}. {result.title}\n   {result.snippet}\n   {result.url}\n"
             )
+        return "\n".join(formatted_results)
     
-    except KeyboardInterrupt:
-        logger.info("收到中断信号，正在关闭...")
-    except Exception as e:
-        logger.error(f"服务器运行错误: {e}")
-    finally:
-        await web_search_tool.close()
+    # 优化内容
+    optimized_content = web_search_tool.optimize_content_for_llm(extracted_contents, query)
+    
+    return optimized_content
+
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    mcp.run()
