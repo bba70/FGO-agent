@@ -113,7 +113,7 @@ def parse_skills(text_block, type):
             idx += 1
         result.append(data)
 
-    print(999)
+    # print(999)
 
     return result
             
@@ -123,16 +123,16 @@ def parse_skills(text_block, type):
 def parse_noble_skills(np_section_text: str) -> List[Dict[str, str]]:
     """技能解析器"""
     result = []
-    print(777)
+    # print(777)
     blocks = re.split(r'===(.*?)\s*===', np_section_text, flags=re.DOTALL)
     # print('blocks', blocks)
     for i in range(1, len(blocks), 2):
         title = blocks[i].strip()
         content = blocks[i+1]
         # content = ''
-        print(title)
-        print(content)
-        print('=='*20)
+        # print(title)
+        # print(content)
+        # print('=='*20)
         if '持有技能' in title:
             parsed_np = parse_skills(content, '持有技能')
             result.extend(parsed_np)
