@@ -1,2 +1,3 @@
 data/textarea/
 __pycache__/
+database/kb/vectorstore/chromaDB/

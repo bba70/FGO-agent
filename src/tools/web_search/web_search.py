@@ -1,16 +1,3 @@
-# === .env 配置文件 ===
-"""
-# 搜索配置
-MAX_SEARCH_RESULTS=5
-MAX_CONTENT_TOKENS=4000
-TIMEOUT_SECONDS=20
-DEBUG=false
-
-# 可选：Google Search API
-GOOGLE_API_KEY=your_google_api_key
-GOOGLE_CX=your_google_cx
-"""
-
 # === web_search_fastmcp.py ===
 
 import asyncio

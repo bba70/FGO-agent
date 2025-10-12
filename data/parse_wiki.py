@@ -1,9 +1,9 @@
 import re
 from typing import Dict, List, Any
-from parse.phantasms import parse_noble_phantasms
-from parse.skills import parse_noble_skills
-from parse.materials import parse_noble_materials
-from parse.profile import parse_noble_profiles
+from data.parse.phantasms import parse_noble_phantasms
+from data.parse.skills import parse_noble_skills
+from data.parse.materials import parse_noble_materials
+from data.parse.profile import parse_noble_profiles
 
 def clean_wikitext_value(value: str) -> str:
     """
