@@ -644,17 +644,29 @@ async def llm_generate_node(state: AgentState) -> Dict[str, Any]:
     router = get_router()
     
     try:
-        logger.info("调用 LLM 生成答案")
+        logger.info("调用 LLM 生成答案（流式）")
         
-        # 调用 LLM（非流式）
-        result, instance_name, physical_model_name, failover_events = await router.chat(
+        # 调用 LLM（流式）
+        stream_wrapper = await router.chat(
             messages=llm_messages,
             model="fgo-chat-model",
-            stream=False
+            stream=True  # 启用流式输出
         )
         
-        # 解析 LLM 响应
-        llm_response = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        # 收集流式响应
+        llm_response = ""
+        async for chunk in stream_wrapper:
+            if chunk.get("choices"):
+                delta = chunk["choices"][0].get("delta", {})
+                content = delta.get("content", "")
+                if content:
+                    llm_response += content
+        
+        # 获取元数据（可选）
+        if hasattr(stream_wrapper, '_metadata_dict'):
+            instance_name = stream_wrapper._metadata_dict.get('instance_name')
+            physical_model_name = stream_wrapper._metadata_dict.get('physical_model_name')
+            logger.info(f"使用实例: {instance_name}, 物理模型: {physical_model_name}")
         
         if not llm_response:
             logger.warning("LLM 返回空响应")
