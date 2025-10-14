@@ -11,9 +11,23 @@ from database.db.connection import  use_sync_connection
 class MemoryDAL:
     '''所有和数据库相关的操作-记忆模块'''
 
+    # 用户相关
+    @use_sync_connection(is_query=True, dictionary_cursor=True)
+    def get_user_by_id(self, cursor, user_id: str) -> Optional[User]:
+        """根据ID获取用户"""
+        sql = """
+        SELECT user_id, username, create_at, update_at
+        FROM users WHERE user_id = %s
+        """
+        cursor.execute(sql, (user_id,))
+        row = cursor.fetchone()
+        if row:
+            return User.from_dict(row)
+        return None
+
     @use_sync_connection(is_query=False)
-    def create_user(self, cursor, username: str) -> None:
-        '''新建用户'''
+    def create_user(self, cursor, username: str) -> str:
+        '''新建用户，返回user_id'''
     
         unique_id = uuid.uuid4()
         current_datetime = datetime.utcnow()
@@ -25,11 +39,20 @@ class MemoryDAL:
         VALUES (%s, %s, %s, %s)
         """
         cursor.execute(sql, (unique_token, username, current_datetime, current_datetime))
+        return unique_token
+
+    @use_sync_connection(is_query=False)
+    def update_user(self, cursor, user_id: str, username: str) -> bool:
+        """更新用户信息"""
+        current_time = datetime.now(timezone.utc)
+        sql = "UPDATE users SET username = %s, update_at = %s WHERE user_id = %s"
+        cursor.execute(sql, (username, current_time, user_id))
+        return cursor.rowcount > 0
 
     # # 会话相关
     @use_sync_connection(is_query=False)
-    def create_session(self, cursor, user_id: str, session_name: str) -> None:
-        '''新建会话'''
+    def create_session(self, cursor, user_id: str, session_name: str) -> str:
+        '''新建会话，返回session_id'''
 
         unique_id = uuid.uuid4()
         current_datetime = datetime.utcnow()
@@ -40,6 +63,7 @@ class MemoryDAL:
         VALUES (%s, %s, %s, %s, %s, %s)
         """
         cursor.execute(sql, (session_id, user_id, session_name, current_datetime, 1, 0))
+        return session_id
 
     @use_sync_connection(is_query=True, dictionary_cursor=True)
     def get_session_by_id(self, cursor, session_id: str) -> Optional[Session]:
@@ -146,12 +170,13 @@ class MemoryDAL:
     @use_sync_connection(is_query=False)
     def add_conversation_turn(self, cursor, session_id: str, query: str, response: str, question_type: str, turn_number: int, token_count: int) -> None:
         """向 conversations 表插入一轮对话"""
+        current_time = datetime.now(timezone.utc)
         sql = """
             INSERT INTO conversations 
-            (session_id, query, response, question_type, turn_number, token_count) 
-            VALUES (%s, %s, %s, %s, %s)
+            (session_id, query, response, question_type, turn_number, token_count, create_at) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
-        cursor.execute(sql, (session_id, query, response, question_type, turn_number, token_count))
+        cursor.execute(sql, (session_id, query, response, question_type, turn_number, token_count, current_time))
     
     @use_sync_connection(is_query=True)
     def get_next_turn_number(self, cursor, session_id: str) -> int:
@@ -165,7 +190,7 @@ class MemoryDAL:
     def get_conversation_by_id(self, cursor, conversation_id: int) -> Optional[Conversation]:
         """根据ID获取对话"""
         sql = """
-        SELECT conversation_id, session_id, query, response, question_type, turn_number, created_time
+        SELECT conversation_id, session_id, query, response, question_type, turn_number, create_at
         FROM conversations WHERE conversation_id = %s
         """
         cursor.execute(sql, (conversation_id,))
@@ -174,18 +199,20 @@ class MemoryDAL:
             return Conversation.from_dict(row)
         return None
                 
-    @use_sync_connection(is_query=True)
+    @use_sync_connection(is_query=True, dictionary_cursor=True)
     def get_conversations_by_turn_range(self, cursor, session_id: str, start_turn: int, end_turn: int) -> List[Conversation]:
         """获取指定轮次范围的对话"""
         sql = """
-        SELECT conversation_id, session_id, query, response, question_type, turn_number, created_time
+        SELECT conversation_id, session_id, query, response, question_type, turn_number, create_at
         FROM conversations 
         WHERE session_id = %s AND turn_number BETWEEN %s AND %s
         ORDER BY turn_number ASC
         """
         cursor.execute(sql, (session_id, start_turn, end_turn))
         rows = cursor.fetchall()
-        return [Conversation.from_dict(row) for row in rows]
+        if rows:
+            return [Conversation.from_dict(row) for row in rows]
+        return []
                 
     @use_sync_connection(is_query=True)
     def get_conversation_count(self, cursor, seesion_id: str) -> int:
@@ -196,18 +223,102 @@ class MemoryDAL:
         cursor.execute(sql, (seesion_id))
         return cursor.fetchone()[0]
                 
-    @use_sync_connection
+    @use_sync_connection(is_query=True, dictionary_cursor=True)
     def get_conversations_by_type(self, cursor, session_id: str, question_type: str) -> List[Conversation]:
         """获取指定类型的对话"""
         sql = """
-        SELECT conversation_id, session_id, query, response, question_type, turn_number, created_time
+        SELECT conversation_id, session_id, query, response, question_type, turn_number, create_at
         FROM conversations 
         WHERE session_id = %s AND question_type = %s
         ORDER BY turn_number ASC
         """
         cursor.execute(sql, (session_id, question_type))
         rows = cursor.fetchall()
-        return [Conversation.from_dict(row) for row in rows]
+        if rows:
+            return [Conversation.from_dict(row) for row in rows]
+        return []
+
+    @use_sync_connection(is_query=True)
+    def get_max_turn_number(self, cursor, session_id: str) -> int:
+        """获取会话的最大轮次号"""
+        sql = "SELECT COALESCE(MAX(turn_number), 0) FROM conversations WHERE session_id = %s"
+        cursor.execute(sql, (session_id,))
+        result = cursor.fetchone()
+        return result[0] if result else 0
+
+    @use_sync_connection(is_query=True, dictionary_cursor=True)
+    def get_session_conversations(self, cursor, session_id: str, limit: int = None, offset: int = 0) -> List[Conversation]:
+        """获取会话的所有对话"""
+        sql = """
+        SELECT conversation_id, session_id, query, response, question_type, turn_number, create_at
+        FROM conversations 
+        WHERE session_id = %s
+        ORDER BY turn_number ASC
+        """
+        params = [session_id]
+        
+        if limit is not None:
+            sql += " LIMIT %s OFFSET %s"
+            params.extend([limit, offset])
+        
+        cursor.execute(sql, tuple(params))
+        rows = cursor.fetchall()
+        if rows:
+            return [Conversation.from_dict(row) for row in rows]
+        return []
+
+    @use_sync_connection(is_query=True, dictionary_cursor=True)
+    def get_recent_conversations(self, cursor, session_id: str, limit: int = 10) -> List[Conversation]:
+        """获取最近的对话"""
+        sql = """
+        SELECT conversation_id, session_id, query, response, question_type, turn_number, create_at
+        FROM conversations 
+        WHERE session_id = %s
+        ORDER BY turn_number DESC
+        LIMIT %s
+        """
+        cursor.execute(sql, (session_id, limit))
+        rows = cursor.fetchall()
+        if rows:
+            # 反转顺序，使其从旧到新
+            return [Conversation.from_dict(row) for row in reversed(rows)]
+        return []
+
+    @use_sync_connection(is_query=True, dictionary_cursor=True)
+    def search_conversations(self, cursor, session_id: str, keyword: str, limit: int = 50) -> List[Conversation]:
+        """搜索对话"""
+        sql = """
+        SELECT conversation_id, session_id, query, response, question_type, turn_number, create_at
+        FROM conversations 
+        WHERE session_id = %s AND (query LIKE %s OR response LIKE %s)
+        ORDER BY turn_number DESC
+        LIMIT %s
+        """
+        search_pattern = f"%{keyword}%"
+        cursor.execute(sql, (session_id, search_pattern, search_pattern, limit))
+        rows = cursor.fetchall()
+        if rows:
+            return [Conversation.from_dict(row) for row in rows]
+        return []
+
+    @use_sync_connection(is_query=False)
+    def delete_conversation(self, cursor, conversation_id: int) -> bool:
+        """删除单个对话"""
+        sql = "DELETE FROM conversations WHERE conversation_id = %s"
+        cursor.execute(sql, (conversation_id,))
+        return cursor.rowcount > 0
+
+    @use_sync_connection(is_query=False)
+    def delete_conversations_after_turn(self, cursor, session_id: str, turn_number: int) -> bool:
+        """删除某轮次之后的所有对话"""
+        sql = "DELETE FROM conversations WHERE session_id = %s AND turn_number > %s"
+        cursor.execute(sql, (session_id, turn_number))
+        
+        # 更新会话的消息计数
+        update_sql = "UPDATE sessions SET message_count = %s WHERE session_id = %s"
+        cursor.execute(update_sql, (turn_number, session_id))
+        
+        return cursor.rowcount > 0
                
         
     # 摘要相关
@@ -216,7 +327,7 @@ class MemoryDAL:
         """创建或更新会话摘要"""
         current_time = datetime.now(timezone.utc)
         sql = """
-        INSERT INTO session_summaries (session_id, summary_text, turn_number, last_summary_time, token_count)
+        INSERT INTO summary (session_id, summary_text, turn_number, last_summary_time, token_count)
         VALUES (%s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             summary_text = VALUES(summary_text),
@@ -231,7 +342,7 @@ class MemoryDAL:
         """获取会话摘要"""
         sql = """
         SELECT session_id, summary_text, turn_number, last_summary_time
-        FROM session_summaries WHERE session_id = %s
+        FROM summary WHERE session_id = %s
         """
         cursor.execute(sql, (session_id,))
         row = cursor.fetchone()
@@ -244,7 +355,7 @@ class MemoryDAL:
         """更新会话摘要"""
         current_time = datetime.now(timezone.utc)
         sql = """
-        UPDATE session_summaries 
+        UPDATE summary
         SET summary_text = %s, turn_number = %s, last_summary_time = %s, token_count = %s
         WHERE session_id = %s
         """
@@ -254,7 +365,7 @@ class MemoryDAL:
     @use_sync_connection(is_query=False)
     def delete_session_summary(self, cursor, session_id: str) -> bool:
         """删除会话摘要"""
-        sql = "DELETE FROM session_summaries WHERE session_id = %s"
+        sql = "DELETE FROM summary WHERE session_id = %s"
         cursor.execute(sql, (session_id,))
         return cursor.rowcount > 0
     

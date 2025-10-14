@@ -7,8 +7,8 @@ from .nodes import (
     query_classify_node,
     knowledge_base_node,
     rag_evaluation_node,
+    llm_generate_node,
     web_search_node,
-    summarize_node,
     end_node,
 )
 
@@ -48,7 +48,7 @@ def route_after_evaluation(state: AgentState) -> str:
         
     Returns:
         str: 下一个节点的名称
-        - "summarize": 评估通过或重试次数已达上限，进入汇总节点
+        - "llm_generate": 评估通过或重试次数已达上限，进入 LLM 生成节点
         - "query_classify": 需要改写查询，回到分类节点重新处理
     """
     evaluation_result = state.get("evaluation_result")
@@ -56,23 +56,23 @@ def route_after_evaluation(state: AgentState) -> str:
     if evaluation_result == "rewrite":
         return "query_classify"
     else:
-        # 默认或 "pass" 都进入汇总节点
-        return "summarize"
+        # 默认或 "pass" 都进入 LLM 生成节点
+        return "llm_generate"
 
 
 # 创建图
 
 def create_game_character_graph():
     """
-    创建并编译游戏角色智能助手的工作流图
+    创建并编译 FGO 游戏助手的工作流图
     
     工作流程：
     1. 查询分类 -> 知识库/网络搜索/结束
     2. 知识库 -> RAG评估
-    3. RAG评估 -> 汇总（通过）/ 查询分类（改写）/ 网络搜索（降级）
-    4. 网络搜索 -> 汇总
-    5. 汇总 -> 结束
-    6. 结束 -> 结束
+    3. RAG评估 -> LLM生成（通过）/ 查询分类（改写重试）
+    4. LLM生成 -> 结束（基于 RAG 文档生成答案）
+    5. 网络搜索 -> 结束（内部完成搜索和答案生成）
+    6. 结束 -> 结束（直接返回，无需生成）
     
     Returns:
         CompiledGraph: 编译后的可执行图
@@ -88,7 +88,7 @@ def create_game_character_graph():
     workflow.add_node("knowledge_base", knowledge_base_node)
     workflow.add_node("rag_evaluation", rag_evaluation_node)
     workflow.add_node("web_search", web_search_node)
-    workflow.add_node("summarize", summarize_node)
+    workflow.add_node("llm_generate", llm_generate_node)
     workflow.add_node("end", end_node)
     
     
@@ -114,15 +114,16 @@ def create_game_character_graph():
         source="rag_evaluation",
         path=route_after_evaluation,
         path_map={
-            "summarize": "summarize",      # 评估通过，进入汇总
+            "llm_generate": "llm_generate",      # 评估通过，进入 LLM 生成
             "query_classify": "query_classify",  # 需要改写，回到分类
-            "web_search": "web_search"     # 降级到网络搜索
         }
     )
     
+    # 5. 网络搜索节点 -> END（固定边，web_search_node 内部已完成答案生成）
+    workflow.add_edge("web_search", END)
     
-    # 6. 汇总节点 -> END（固定边）
-    workflow.add_edge("summarize", END)
+    # 6. LLM 生成节点 -> END（固定边）
+    workflow.add_edge("llm_generate", END)
     
     # 7. 结束节点 -> END（固定边）
     workflow.add_edge("end", END)
@@ -154,34 +155,35 @@ def get_graph_info():
         "nodes": [
             "query_classify",      # 查询分类节点
             "knowledge_base",      # RAG 检索节点
-            "rag_evaluation",      # RAG 评估节点（新增）
+            "rag_evaluation",      # RAG 评估节点
+            "llm_generate",        # LLM 生成答案节点
             "web_search",          # 网络搜索节点
-            "summarize",           # 汇总节点（新增）
             "end"                  # 结束节点
         ],
         "entry_point": "query_classify",
         "routing_logic": {
             "query_classify": "根据 query_classification 路由 -> knowledge_base/web_search/end",
             "knowledge_base": "固定路由 -> rag_evaluation",
-            "rag_evaluation": "根据 evaluation_result 路由 -> summarize/query_classify/web_search",
-            "web_search": "固定路由 -> summarize",
-            "summarize": "固定路由 -> END（清理中间状态）",
+            "rag_evaluation": "根据 evaluation_result 路由 -> llm_generate/query_classify(重试)",
+            "llm_generate": "固定路由 -> END（生成答案并清理中间状态）",
+            "web_search": "固定路由 -> END（内部完成搜索和答案生成）",
             "end": "固定路由 -> END"
         },
         "state_flow": [
             "START -> query_classify",
             "query_classify -> [knowledge_base|web_search|end]",
             "knowledge_base -> rag_evaluation",
-            "rag_evaluation -> [summarize|query_classify(重试)|web_search(降级)]",
-            "web_search -> summarize",
-            "summarize -> END",
+            "rag_evaluation -> [llm_generate|query_classify(重试)]",
+            "llm_generate -> END",
+            "web_search -> END",
             "end -> END"
         ],
         "key_features": [
             "支持 RAG 质量评估",
             "支持查询改写重试（最多2次）",
-            "支持降级到网络搜索",
-            "自动清理中间状态，只保留 query 和 answer"
+            "基于 LLM 的评估和答案生成",
+            "FastMCP 集成的网络搜索",
+            "自动清理中间状态，只保留对话历史"
         ]
     }
     return graph_info

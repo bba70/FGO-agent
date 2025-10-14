@@ -1,4 +1,4 @@
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Any
 from datetime import datetime
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from langchain.chat_models import init_chat_model
@@ -130,31 +130,35 @@ class MemoryManager:
         
         Args:
             session_id: 会话ID
-            user_query: 用户问题
-            ai_response: AI回答
+            query: 用户问题
+            response: AI回答
             question_type: 问题类型(knowledge_base, web_search, general)
+            token_count: token数量
             
         Returns:
             bool: 是否保存成功
         """
         try:
+            # 获取下一个轮次号
+            turn_number = self.dal.get_next_turn_number(session_id)
+            print(f"📝 准备保存对话 - Session: {session_id}, Turn: {turn_number}")
+            
             # 保存对话
-            conversation_id = self.dal.add_conversation_turn(
-                session_id, query, response, question_type, token_count
+            self.dal.add_conversation_turn(
+                session_id, query, response, question_type, turn_number, token_count
             )
+            print(f"✅ 对话数据已插入数据库")
             
             # 更新会话活跃状态
             self.dal.update_session_activity(session_id)
+            print(f"✅ 会话活跃状态已更新")
             
-            # 检查是否需要生成摘要
-            current_turn = self.dal.get_max_turn_number(session_id)
-            if current_turn >= self.summary_threshold and current_turn % self.summary_threshold == 0:
-                self._generate_session_summary(session_id, current_turn)
-            
-            return conversation_id is not None
+            return True
             
         except Exception as e:
-            print(f"保存对话失败: {e}")
+            print(f"❌ 保存对话失败: {e}")
+            import traceback
+            traceback.print_exc()
             return False
         
     def get_conversation_history(
@@ -237,7 +241,7 @@ class MemoryManager:
         
         summary = self.dal.get_session_summary(session_id)
         start_turn = 0
-        messages = List[BaseMessage] = []
+        messages: List[BaseMessage] = []
         token_count = 0
 
         if summary:

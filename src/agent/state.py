@@ -45,6 +45,7 @@ class AgentState(InputState):
     retrieved_docs: Optional[List[Dict[str, Any]]]
     retrieval_score: Optional[float]
     evaluation_result: Optional[Literal["pass", "rewrite"]]
+    evaluation_reason: Optional[str]  # LLM 评估的失败原因，用于指导查询改写
 
 
 # --- 第三部分：定义输出状态（清理后的状态）---

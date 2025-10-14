@@ -76,9 +76,8 @@ def monitor_llm_call(type: str):
                                     type=instance_config['type'],
                                     base_url=instance_config.get('base_url', '')
                                 )
-                                model_id = await log_dal.get_or_create_model(model_obj)
                                 
-                                # 计算 token（从 chunks 中提取）
+                                # 计算 token（从 chunks 中提取，在 try 外初始化）
                                 chunks = result.get_chunks()
                                 prompt_tokens = 0
                                 completion_tokens = 0
@@ -94,20 +93,29 @@ def monitor_llm_call(type: str):
                                                 completion_tokens = usage.get('completion_tokens', 0)
                                                 break
                                 
-                                log_obj = Logs(
-                                    id=call_id,
-                                    model_id=model_id,
-                                    status="success",
-                                    type=type,
-                                    logical_model=logical_model,
-                                    timestamp_start=start_time,
-                                    timestamp_end=end_time,
-                                    is_stream=True,
-                                    prompt_token=prompt_tokens,
-                                    completion_token=completion_tokens,
-                                    failover_events=failover_events_json, 
-                                )
-                                await log_dal.save_log(log_obj)
+                                try:
+                                    model_id = await log_dal.get_or_create_model(model_obj)
+                                    
+                                    log_obj = Logs(
+                                        id=call_id,
+                                        model_id=model_id,
+                                        status="success",
+                                        type=type,
+                                        logical_model=logical_model,
+                                        timestamp_start=start_time,
+                                        timestamp_end=end_time,
+                                        is_stream=True,
+                                        prompt_token=prompt_tokens,
+                                        completion_token=completion_tokens,
+                                        failover_events=failover_events_json, 
+                                    )
+                                    await log_dal.save_log(log_obj)
+                                except (RuntimeError, AttributeError) as db_error:
+                                    # 如果事件循环已关闭，忽略日志记录错误
+                                    if "Event loop is closed" in str(db_error) or "'NoneType' object has no attribute 'send'" in str(db_error):
+                                        logger.debug(f"流式日志记录失败（事件循环已关闭），忽略: {db_error}")
+                                    else:
+                                        logger.warning(f"流式日志记录失败: {db_error}")
                                 logger.info(f"✅ 流式调用成功: {instance_name} - {physical_model_name} (tokens: {prompt_tokens}/{completion_tokens})")
                                 if failover_events_list and len(failover_events_list) > 1:
                                     logger.info(f"容灾信息: 尝试了 {len(failover_events_list)} 个实例")
@@ -146,27 +154,36 @@ def monitor_llm_call(type: str):
                         type=instance_config['type'],
                         base_url=instance_config.get('base_url', '')
                     )
-                    model_id = await log_dal.get_or_create_model(model_obj)
                     
-                    # 安全地获取 token 信息
+                    # 安全地获取 token 信息（在 try 外初始化）
                     usage = response_data.get('usage', {}) if isinstance(response_data, dict) else {}
                     prompt_tokens = usage.get('prompt_tokens', 0) if isinstance(usage, dict) else 0
                     completion_tokens = usage.get('completion_tokens', 0) if isinstance(usage, dict) else 0
                     
-                    log_obj = Logs(
-                        id=call_id,
-                        model_id=model_id,
-                        status="success",
-                        type=type,
-                        logical_model=logical_model,
-                        timestamp_start=start_time,
-                        timestamp_end=end_time,
-                        is_stream=False,
-                        prompt_token=prompt_tokens,
-                        completion_token=completion_tokens,
-                        failover_events=failover_events_json,
-                    )
-                    await log_dal.save_log(log_obj)
+                    try:
+                        model_id = await log_dal.get_or_create_model(model_obj)
+                        
+                        log_obj = Logs(
+                            id=call_id,
+                            model_id=model_id,
+                            status="success",
+                            type=type,
+                            logical_model=logical_model,
+                            timestamp_start=start_time,
+                            timestamp_end=end_time,
+                            is_stream=False,
+                            prompt_token=prompt_tokens,
+                            completion_token=completion_tokens,
+                            failover_events=failover_events_json,
+                        )
+                        await log_dal.save_log(log_obj)
+                    except (RuntimeError, AttributeError) as db_error:
+                        # 如果事件循环已关闭，忽略日志记录错误
+                        if "Event loop is closed" in str(db_error) or "'NoneType' object has no attribute 'send'" in str(db_error):
+                            logger.debug(f"日志记录失败（事件循环已关闭），忽略: {db_error}")
+                        else:
+                            # 其他数据库错误，记录但不中断
+                            logger.warning(f"日志记录失败: {db_error}")
                     logger.info(f"非流式调用成功: {instance_name} - {physical_model_name} (tokens: {prompt_tokens}/{completion_tokens})")
                     if failover_events and len(failover_events) > 1:
                         logger.info(f"容灾信息: 尝试了 {len(failover_events)} 个实例")
@@ -187,7 +204,14 @@ def monitor_llm_call(type: str):
                     is_stream=is_stream,
                     error_message=f"所有实例均失败: {e}\n{traceback.format_exc()}",
                 )
-                await log_dal.save_log(failure_log)
+                try:
+                    await log_dal.save_log(failure_log)
+                except (RuntimeError, AttributeError) as db_error:
+                    # 如果事件循环已关闭，忽略日志记录错误
+                    if "Event loop is closed" in str(db_error) or "'NoneType' object has no attribute 'send'" in str(db_error):
+                        logger.debug(f"失败日志记录失败（事件循环已关闭），忽略: {db_error}")
+                    else:
+                        logger.warning(f"失败日志记录失败: {db_error}")
                 logger.error(f"调用失败: {e}")
                 raise
 

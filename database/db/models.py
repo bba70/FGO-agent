@@ -3,6 +3,26 @@ from datetime import datetime
 from typing import Optional, List
 from enum import Enum
 
+
+def parse_datetime(value):
+    """
+    解析日期时间（兼容datetime对象和字符串）
+    
+    Args:
+        value: datetime对象、ISO格式字符串或None
+        
+    Returns:
+        datetime对象或None
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        return datetime.fromisoformat(value)
+    return None
+
+
 @dataclass
 class User:
     '''用户实体'''
@@ -13,11 +33,12 @@ class User:
 
     @classmethod
     def from_dict(cls, data: dict) -> 'User':
+        """从字典创建User对象（兼容datetime对象和字符串）"""
         return cls(
             user_id=data.get('user_id'),
             username=data.get('username'),
-            create_at=datetime.fromisoformat(data.get('create_at')) if data.get('create_at') else None,
-            update_at=datetime.fromisoformat(data.get('update_at')) if data.get('update_at') else None    
+            create_at=parse_datetime(data.get('create_at')),
+            update_at=parse_datetime(data.get('update_at'))
         )
 
     def to_dict(self) -> dict:
@@ -45,7 +66,7 @@ class Session:
             session_id=data.get('session_id'),
             user_id=data.get('user_id'),
             session_name=data.get('session_name'),
-            last_active=data.get('last_active'), 
+            last_active=parse_datetime(data.get('last_active')), 
             is_active=int(data.get('is_active', 0)),
             message_count=int(data.get('message_count', 0))
         )
@@ -69,7 +90,7 @@ class Conversation:
     query: Optional[str] = None
     response: Optional[str] = None
     question_type: Optional[str] = None
-    created_time: Optional[datetime] = None
+    created_at: Optional[datetime] = None
     turn_number: int = 0
     token_count: int = 0
     
@@ -79,10 +100,10 @@ class Conversation:
         return cls(
             conversation_id=data.get('conversation_id'),
             session_id=data.get('session_id'),
-            user_question=data.get('user_question'),
-            ai_response=data.get('ai_response'),
-            question_type=(data.get('question_type', 'general')),
-            created_at=datetime.fromisoformat(data['created_at']) if data.get('created_at') else None,
+            query=data.get('query'),
+            response=data.get('response'),
+            question_type=data.get('question_type', 'general'),
+            created_at=parse_datetime(data.get('created_at')),
             turn_number=int(data.get('turn_number', 0)),
             token_count=int(data.get('token_count', 0))
         )
@@ -115,8 +136,8 @@ class SessionSummary:
         return cls(
             session_id=data.get('session_id'),
             summary_text=data.get('summary_text'),
-            turned_number=int(data.get('turned_number', 0)),
-            last_summary_time=datetime.fromisoformat(data['last_summary_time']) if data.get('last_summary_time') else None,
+            turn_number=int(data.get('turned_number', 0)),  # 数据库字段是turned_number
+            last_summary_time=parse_datetime(data.get('last_summary_time')),
             token_count=int(data.get('token_count', 0))
         )
     
