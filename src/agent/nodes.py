@@ -9,11 +9,17 @@ import os
 
 from .state import AgentState
 from src.tools.rag.rag import retrieve_documents, calculate_retrieval_quality
-from src.tools.rag.entity_linking import link_entities
+from src.tools.rag.entity_linking import link_entities, enhance_query_for_retrieval, extract_servant_name
 from llm.router import ModelRouter
 
-# FastMCP 客户端相关导入
-from fastmcp import FastMCP
+# MCP 客户端相关导入（用于连接 FastMCP 服务器）
+try:
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+    MCP_AVAILABLE = True
+except ImportError:
+    MCP_AVAILABLE = False
+    logger.warning("⚠️ 未安装 mcp 客户端库，网络搜索功能将不可用。安装方法: pip install mcp")
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +36,44 @@ def get_router() -> ModelRouter:
         _router = ModelRouter(str(config_path))
     return _router
 
+
 # ============================================================================
-# 节点定义（仅定义接口，不做具体实现）
+# 辅助函数
+# ============================================================================
+
+def preserve_stream_callback(state: AgentState, result: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    辅助函数：在返回结果中保留 stream_callback
+    
+    **为什么需要这个函数？**
+    
+    在 LangGraph 中，节点返回的字典会与当前状态合并。如果返回字典中没有包含某个字段，
+    该字段可能会在状态传递过程中丢失。
+    
+    stream_callback 只在输出节点（llm_generate_node/web_search_node）中被实际调用，
+    但必须通过所有中间节点传递，否则到达输出节点时会丢失。
+    
+    **使用方式：**
+    ```python
+    return preserve_stream_callback(state, {
+        "field1": "value1",
+        "field2": "value2"
+    })
+    ```
+    
+    Args:
+        state: 当前状态
+        result: 节点要返回的结果字典
+        
+    Returns:
+        添加了 stream_callback 的结果字典
+    """
+    result["stream_callback"] = state.get("stream_callback")
+    return result
+
+
+# ============================================================================
+# 节点定义
 # ============================================================================
 
 async def query_classify_node(state: AgentState) -> Dict[str, Any]:
@@ -62,6 +104,7 @@ async def query_classify_node(state: AgentState) -> Dict[str, Any]:
         return {
             "query_classification": "end",
             "original_query": "",
+            "stream_callback": state.get("stream_callback"),  # 🎯 传递 stream_callback
         }
     
     logger.info(f"用户原始查询: '{user_query}'")
@@ -249,6 +292,7 @@ async def query_classify_node(state: AgentState) -> Dict[str, Any]:
                 "query_classification": classification,
                 "original_query": user_query,
                 "rewritten_query": rewritten_query,
+                "stream_callback": state.get("stream_callback"),  # 🎯 传递 stream_callback
             }
             if retry_count == 0:
                 result["retry_count"] = 0
@@ -261,6 +305,7 @@ async def query_classify_node(state: AgentState) -> Dict[str, Any]:
                 "query_classification": "knowledge_base",
                 "original_query": user_query,
                 "rewritten_query": rewritten_query,
+                "stream_callback": state.get("stream_callback"),  # 🎯 传递 stream_callback
             }
             if retry_count == 0:
                 result["retry_count"] = 0
@@ -273,6 +318,7 @@ async def query_classify_node(state: AgentState) -> Dict[str, Any]:
             "query_classification": "knowledge_base",
             "original_query": user_query,
             "rewritten_query": rewritten_query,
+            "stream_callback": state.get("stream_callback"),  # 🎯 传递 stream_callback
         }
         if retry_count == 0:
             result["retry_count"] = 0
@@ -317,20 +363,47 @@ def knowledge_base_node(state: AgentState) -> Dict[str, Any]:
         logger.warning("未找到查询文本，返回空结果")
         return {
             "retrieved_docs": [],
-            "retrieval_score": 0.0
+            "retrieval_score": 0.0,
+            "stream_callback": state.get("stream_callback"),  # 🎯 传递 stream_callback
         }
     
-    # 2. 执行 RAG 检索（包含向量检索 + CrossEncoder 重排序）
+    # 2. 🎯 优化：增强查询，提高检索精度
+    enhanced_query = enhance_query_for_retrieval(query)
+    servant_name = extract_servant_name(query)
+    
+    if enhanced_query != query:
+        logger.info(f"✨ 查询增强: '{query}' → '{enhanced_query}'")
+    if servant_name:
+        logger.info(f"🎯 检测到从者: {servant_name}")
+    
+    # 3. 执行 RAG 检索（包含向量检索 + CrossEncoder 重排序）
     try:
-        logger.info(f"开始检索文档，查询: '{query}'")
+        logger.info(f"开始检索文档，查询: '{enhanced_query}'")
         documents = retrieve_documents(
-            query=query,
-            top_k=5,  # 返回 top 5 文档
+            query=enhanced_query,  # 🎯 使用增强后的查询
+            top_k=10,  # 🎯 先检索更多文档（从 5 改为 10）
             rerank=True,  # 启用重排序
             rerank_method="crossencoder"  # 使用 CrossEncoder 重排序
         )
         
         logger.info(f"检索完成，共找到 {len(documents)} 个相关文档")
+        
+        # 🎯 优化：如果检测到从者名称，过滤掉不匹配的文档
+        if servant_name and documents:
+            original_count = len(documents)
+            filtered_docs = [
+                doc for doc in documents
+                if doc['metadata'].get('servant_name') == servant_name
+            ]
+            
+            if filtered_docs:
+                logger.info(f"🎯 从者名称过滤: {original_count} → {len(filtered_docs)} (仅保留 {servant_name})")
+                documents = filtered_docs[:5]  # 只保留前 5 个
+            else:
+                logger.warning(f"⚠️ 未找到 {servant_name} 的文档，使用原始结果")
+                documents = documents[:5]
+        else:
+            documents = documents[:5]  # 没有从者名称，直接取前 5
         
         # 记录检索结果摘要
         if documents:
@@ -342,7 +415,8 @@ def knowledge_base_node(state: AgentState) -> Dict[str, Any]:
                 )
         
         return {
-            "retrieved_docs": documents
+            "retrieved_docs": documents,
+            "stream_callback": state.get("stream_callback"),  # 🎯 传递 stream_callback
         }
         
     except Exception as e:
@@ -350,7 +424,8 @@ def knowledge_base_node(state: AgentState) -> Dict[str, Any]:
         # 检索失败时返回空结果
         return {
             "retrieved_docs": [],
-            "retrieval_score": 0.0
+            "retrieval_score": 0.0,
+            "stream_callback": state.get("stream_callback"),  # 🎯 传递 stream_callback
         }
 
 
@@ -390,14 +465,16 @@ async def rag_evaluation_node(state: AgentState) -> Dict[str, Any]:
                 "evaluation_result": "rewrite",
                 "retrieval_score": 0.0,
                 "retry_count": retry_count + 1,
-                "evaluation_reason": "未检索到任何相关文档，建议补全从者全名或明确查询的数据类型（技能/宝具/资料/素材）"
+                "evaluation_reason": "未检索到任何相关文档，建议补全从者全名或明确查询的数据类型（技能/宝具/资料/素材）",
+                "stream_callback": state.get("stream_callback"),  # 🎯 传递 stream_callback
             }
         else:
             logger.warning(f"已达最大重试次数 {MAX_RETRY}，强制通过")
             return {
                 "evaluation_result": "pass",
                 "retrieval_score": 0.0,
-                "retry_count": retry_count
+                "retry_count": retry_count,
+                "stream_callback": state.get("stream_callback"),  # 🎯 传递 stream_callback
             }
     
     # 3. 计算检索质量分数
@@ -486,7 +563,8 @@ async def rag_evaluation_node(state: AgentState) -> Dict[str, Any]:
                     "evaluation_result": "rewrite",
                     "retrieval_score": quality_score,
                     "retry_count": retry_count + 1,
-                    "evaluation_reason": reason  # 👈 携带 LLM 评估的失败原因
+                    "evaluation_reason": reason,  # 👈 携带 LLM 评估的失败原因
+                    "stream_callback": state.get("stream_callback"),  # 🎯 传递 stream_callback
                 }
             else:
                 # LLM 建议 pass 或已达最大重试次数
@@ -498,7 +576,8 @@ async def rag_evaluation_node(state: AgentState) -> Dict[str, Any]:
                 return {
                     "evaluation_result": "pass",
                     "retrieval_score": quality_score,
-                    "retry_count": retry_count
+                    "retry_count": retry_count,
+                    "stream_callback": state.get("stream_callback"),  # 🎯 传递 stream_callback
                 }
             
         except json.JSONDecodeError:
@@ -506,7 +585,8 @@ async def rag_evaluation_node(state: AgentState) -> Dict[str, Any]:
             return {
                 "evaluation_result": "pass",
                 "retrieval_score": quality_score,
-                "retry_count": retry_count
+                "retry_count": retry_count,
+                "stream_callback": state.get("stream_callback"),  # 🎯 传递 stream_callback
             }
     
     except Exception as e:
@@ -515,28 +595,33 @@ async def rag_evaluation_node(state: AgentState) -> Dict[str, Any]:
         # LLM 评估失败，回退到基于质量分数的简单判断
         logger.info("回退到基于质量分数的简单判断")
         
-        # 质量分数阈值：> 0.6 为合格
-        if quality_score > 0.6:
-            logger.info(f"质量分数 {quality_score:.3f} > 0.6，评估通过")
+        # 🎯 优化：降低质量分数阈值（提高召回率）
+        QUALITY_THRESHOLD = 0.4
+        
+        if quality_score > QUALITY_THRESHOLD:
+            logger.info(f"质量分数 {quality_score:.3f} > {QUALITY_THRESHOLD}，评估通过")
             return {
                 "evaluation_result": "pass",
                 "retrieval_score": quality_score,
-                "retry_count": retry_count
+                "retry_count": retry_count,
+                "stream_callback": state.get("stream_callback"),  # 🎯 传递 stream_callback
             }
         elif retry_count < MAX_RETRY:
-            logger.info(f"质量分数 {quality_score:.3f} <= 0.6，尝试改写（{retry_count + 1}/{MAX_RETRY}）")
+            logger.info(f"质量分数 {quality_score:.3f} <= {QUALITY_THRESHOLD}，尝试改写（{retry_count + 1}/{MAX_RETRY}）")
             return {
                 "evaluation_result": "rewrite",
                 "retrieval_score": quality_score,
                 "retry_count": retry_count + 1,
-                "evaluation_reason": f"检索质量分数较低（{quality_score:.3f}），文档相关性不足，建议改写查询"
+                "evaluation_reason": f"检索质量分数较低（{quality_score:.3f}），文档相关性不足，建议改写查询",
+                "stream_callback": state.get("stream_callback"),  # 🎯 传递 stream_callback
             }
         else:
             logger.warning(f"质量分数低但已达最大重试次数，强制通过")
             return {
                 "evaluation_result": "pass",
                 "retrieval_score": quality_score,
-                "retry_count": retry_count
+                "retry_count": retry_count,
+                "stream_callback": state.get("stream_callback"),  # 🎯 传递 stream_callback
             }
 
 
@@ -578,6 +663,7 @@ async def llm_generate_node(state: AgentState) -> Dict[str, Any]:
             "retrieval_score": None,
             "evaluation_result": None,
             "evaluation_reason": None,
+            "stream_callback": None,  # 清理流式回调
         }
     
     if not retrieved_docs:
@@ -593,6 +679,7 @@ async def llm_generate_node(state: AgentState) -> Dict[str, Any]:
             "retrieval_score": None,
             "evaluation_result": None,
             "evaluation_reason": None,
+            "stream_callback": None,  # 清理流式回调
         }
     
     logger.info(f"用户查询: '{user_query}'")
@@ -653,14 +740,23 @@ async def llm_generate_node(state: AgentState) -> Dict[str, Any]:
             stream=True  # 启用流式输出
         )
         
-        # 收集流式响应
+        # 🎯 收集并实时发送流式响应
         llm_response = ""
+        stream_callback = state.get("stream_callback")  # 获取流式回调
+        
         async for chunk in stream_wrapper:
             if chunk.get("choices"):
                 delta = chunk["choices"][0].get("delta", {})
                 content = delta.get("content", "")
                 if content:
                     llm_response += content
+                    
+                    # 🎯 如果有回调函数，实时发送 token
+                    if stream_callback and callable(stream_callback):
+                        try:
+                            await stream_callback(content)
+                        except Exception as e:
+                            logger.warning(f"流式回调失败: {e}")
         
         # 获取元数据（可选）
         if hasattr(stream_wrapper, '_metadata_dict'):
@@ -686,6 +782,7 @@ async def llm_generate_node(state: AgentState) -> Dict[str, Any]:
             "retrieval_score": None,
             "evaluation_result": None,
             "evaluation_reason": None,
+            "stream_callback": None,
         }
     
     except Exception as e:
@@ -716,6 +813,7 @@ async def llm_generate_node(state: AgentState) -> Dict[str, Any]:
             "retrieval_score": None,
             "evaluation_result": None,
             "evaluation_reason": None,
+            "stream_callback": None,
         }
 
 
@@ -757,13 +855,20 @@ async def web_search_node(state: AgentState) -> Dict[str, Any]:
             "retrieval_score": None,
             "evaluation_result": None,
             "evaluation_reason": None,
+            "stream_callback": None,  # 清理流式回调
         }
     
     logger.info(f"用户查询: '{user_query}'")
     
-    # 2. 调用 FastMCP 服务器进行网络搜索
-    async def call_fastmcp_search():
-        """通过 FastMCP 客户端调用 search_and_extract 工具"""
+    # 2. 调用 MCP 服务器进行网络搜索
+    async def call_mcp_search():
+        """通过 MCP 客户端调用 search_and_extract 工具"""
+        
+        # 检查 MCP 客户端是否可用
+        if not MCP_AVAILABLE:
+            logger.error("MCP 客户端库未安装，无法进行网络搜索")
+            return None
+        
         # 获取 web_search.py 的绝对路径
         current_dir = Path(__file__).parent.parent
         web_search_script = current_dir / "tools" / "web_search" / "web_search.py"
@@ -772,46 +877,52 @@ async def web_search_node(state: AgentState) -> Dict[str, Any]:
             logger.error(f"未找到 web_search.py: {web_search_script}")
             return None
         
-        logger.info(f"连接 FastMCP 服务器: {web_search_script}")
+        logger.info(f"连接 MCP 服务器: {web_search_script}")
         
         try:
-            # 使用 FastMCP 客户端连接到服务器
-            # FastMCP 使用 stdio 传输，通过子进程启动服务器
-            client = FastMCP("web-search-client")
-            
-            # 通过 stdio 连接到服务器
-            async with client.stdio_client(
+            # 配置服务器参数
+            server_params = StdioServerParameters(
                 command=sys.executable,
                 args=[str(web_search_script)],
                 env=None
-            ) as connection:
-                logger.info("FastMCP 连接建立成功")
-                
-                # 调用 search_and_extract 工具
-                logger.info(f"调用工具: search_and_extract, query={user_query}")
-                
-                result = await connection.call_tool(
-                    "search_and_extract",
-                    query=user_query,
-                    max_results=5,
-                    extract_count=3
-                )
-                
-                # 解析返回结果
-                if result:
-                    logger.info(f"FastMCP 搜索成功，结果长度: {len(result)} 字符")
-                    return result
-                else:
-                    logger.warning("FastMCP 工具返回空结果")
-                    return None
+            )
+            
+            # 通过 stdio 连接到 MCP 服务器
+            async with stdio_client(server_params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    # 初始化会话
+                    await session.initialize()
+                    logger.info("✅ MCP 服务器连接成功")
+                    
+                    # 调用 search_and_extract 工具
+                    logger.info(f"调用工具: search_and_extract, query={user_query}")
+                    
+                    result = await session.call_tool(
+                        "search_and_extract",
+                        arguments={
+                            "query": user_query,
+                            "max_results": 5,
+                            "extract_count": 3
+                        }
+                    )
+                    
+                    # 解析返回结果
+                    if result and result.content:
+                        # MCP 返回的是 content 列表
+                        result_text = "\n".join([content.text for content in result.content])
+                        logger.info(f"✅ MCP 搜索成功，结果长度: {len(result_text)} 字符")
+                        return result_text
+                    else:
+                        logger.warning("MCP 工具返回空结果")
+                        return None
         
         except Exception as e:
-            logger.error(f"FastMCP 调用失败: {str(e)}", exc_info=True)
+            logger.error(f"MCP 调用失败: {str(e)}", exc_info=True)
             return None
     
     # 执行搜索
     try:
-        search_results = await call_fastmcp_search()
+        search_results = await call_mcp_search()
     except Exception as e:
         logger.error(f"执行网络搜索失败: {str(e)}", exc_info=True)
         search_results = None
@@ -865,17 +976,39 @@ async def web_search_node(state: AgentState) -> Dict[str, Any]:
     router = get_router()
     
     try:
-        logger.info("调用 LLM 生成答案")
+        logger.info("调用 LLM 生成答案（流式）")
         
-        # 调用 LLM（非流式）
-        result, instance_name, physical_model_name, failover_events = await router.chat(
+        # 调用 LLM（流式）
+        stream_wrapper = await router.chat(
             messages=llm_messages,
             model="fgo-chat-model",
-            stream=False
+            stream=True  # 启用流式输出
         )
         
-        # 解析 LLM 响应
-        llm_response = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        # 🎯 收集并实时发送流式响应
+        llm_response = ""
+        stream_callback = state.get("stream_callback")  # 获取流式回调
+        
+        async for chunk in stream_wrapper:
+            if chunk.get("choices"):
+                delta = chunk["choices"][0].get("delta", {})
+                content = delta.get("content", "")
+                
+                if content:
+                    llm_response += content
+                    
+                    # 🎯 如果有回调函数，实时发送 token
+                    if stream_callback and callable(stream_callback):
+                        try:
+                            await stream_callback(content)
+                        except Exception as e:
+                            logger.warning(f"流式回调失败: {e}")
+        
+        # 获取元数据（可选）
+        if hasattr(stream_wrapper, '_metadata_dict'):
+            instance_name = stream_wrapper._metadata_dict.get('instance_name')
+            physical_model_name = stream_wrapper._metadata_dict.get('physical_model_name')
+            logger.info(f"使用实例: {instance_name}, 物理模型: {physical_model_name}")
         
         if not llm_response:
             logger.warning("LLM 返回空响应，使用搜索结果作为兜底")
@@ -895,6 +1028,7 @@ async def web_search_node(state: AgentState) -> Dict[str, Any]:
             "retrieval_score": None,
             "evaluation_result": None,
             "evaluation_reason": None,
+            "stream_callback": None,  # 清理流式回调
         }
     
     except Exception as e:
@@ -915,6 +1049,7 @@ async def web_search_node(state: AgentState) -> Dict[str, Any]:
             "retrieval_score": None,
             "evaluation_result": None,
             "evaluation_reason": None,
+            "stream_callback": None,  # 清理流式回调
         }
 
     
@@ -931,4 +1066,5 @@ def end_node(state: AgentState) -> Dict[str, Any]:
         "query_classification": None,
         "retry_count": None,
         "original_query": None,
+        "stream_callback": None,  # 清理流式回调
     }

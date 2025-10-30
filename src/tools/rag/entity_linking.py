@@ -178,6 +178,61 @@ def link_entities(query: str) -> str:
     return linker.link(query)
 
 
+def extract_servant_name(query: str) -> Optional[str]:
+    """
+    🎯 优化：从查询中提取从者名称
+    
+    Args:
+        query: 用户查询
+        
+    Returns:
+        标准从者名称（如果找到）
+    """
+    linker = get_entity_linker()
+    
+    # 按别名长度排序（长的优先匹配）
+    sorted_aliases = sorted(
+        linker.alias_to_canonical.keys(),
+        key=len,
+        reverse=True
+    )
+    
+    for alias in sorted_aliases:
+        if alias in query.lower():
+            return linker.alias_to_canonical[alias]
+    
+    return None
+
+
+def enhance_query_for_retrieval(query: str) -> str:
+    """
+    🎯 优化：增强查询，提高检索精度
+    
+    策略：
+    1. 提取从者名称
+    2. 重复从者名称，增强 Embedding 权重
+    
+    Args:
+        query: 原始查询
+        
+    Returns:
+        增强后的查询
+    """
+    # 先做实体链接
+    linked_query = link_entities(query)
+    
+    # 提取从者名称
+    servant_name = extract_servant_name(linked_query)
+    
+    if servant_name:
+        # 🎯 重复从者名称3次，大幅增强权重
+        enhanced = f"{servant_name}。{linked_query}。{servant_name}的信息"
+        logger.debug(f"查询增强: '{query}' → '{enhanced}'")
+        return enhanced
+    
+    return linked_query
+
+
 # ==================== 测试代码 ====================
 
 def test_entity_linking():

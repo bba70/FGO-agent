@@ -170,13 +170,12 @@ class MemoryDAL:
     @use_sync_connection(is_query=False)
     def add_conversation_turn(self, cursor, session_id: str, query: str, response: str, question_type: str, turn_number: int, token_count: int) -> None:
         """向 conversations 表插入一轮对话"""
-        current_time = datetime.now(timezone.utc)
         sql = """
             INSERT INTO conversations 
-            (session_id, query, response, question_type, turn_number, token_count, create_at) 
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            (session_id, query, response, question_type, turn_number, token_count) 
+            VALUES (%s, %s, %s, %s, %s, %s)
         """
-        cursor.execute(sql, (session_id, query, response, question_type, turn_number, token_count, current_time))
+        cursor.execute(sql, (session_id, query, response, question_type, turn_number, token_count))
     
     @use_sync_connection(is_query=True)
     def get_next_turn_number(self, cursor, session_id: str) -> int:
@@ -186,11 +185,12 @@ class MemoryDAL:
         result = cursor.fetchone()
         return result[0] if result else 1
                 
-    @use_sync_connection(is_query=True)
+    @use_sync_connection(is_query=True, dictionary_cursor=True)
     def get_conversation_by_id(self, cursor, conversation_id: int) -> Optional[Conversation]:
         """根据ID获取对话"""
         sql = """
-        SELECT conversation_id, session_id, query, response, question_type, turn_number, create_at
+        SELECT conversation_id, session_id, query, response, question_type, turn_number, token_count,
+               NULL AS created_at
         FROM conversations WHERE conversation_id = %s
         """
         cursor.execute(sql, (conversation_id,))
@@ -203,7 +203,8 @@ class MemoryDAL:
     def get_conversations_by_turn_range(self, cursor, session_id: str, start_turn: int, end_turn: int) -> List[Conversation]:
         """获取指定轮次范围的对话"""
         sql = """
-        SELECT conversation_id, session_id, query, response, question_type, turn_number, create_at
+        SELECT conversation_id, session_id, query, response, question_type, turn_number, token_count,
+               NULL AS created_at
         FROM conversations 
         WHERE session_id = %s AND turn_number BETWEEN %s AND %s
         ORDER BY turn_number ASC
@@ -227,7 +228,8 @@ class MemoryDAL:
     def get_conversations_by_type(self, cursor, session_id: str, question_type: str) -> List[Conversation]:
         """获取指定类型的对话"""
         sql = """
-        SELECT conversation_id, session_id, query, response, question_type, turn_number, create_at
+        SELECT conversation_id, session_id, query, response, question_type, turn_number, token_count,
+               NULL AS created_at
         FROM conversations 
         WHERE session_id = %s AND question_type = %s
         ORDER BY turn_number ASC
@@ -250,7 +252,8 @@ class MemoryDAL:
     def get_session_conversations(self, cursor, session_id: str, limit: int = None, offset: int = 0) -> List[Conversation]:
         """获取会话的所有对话"""
         sql = """
-        SELECT conversation_id, session_id, query, response, question_type, turn_number, create_at
+        SELECT conversation_id, session_id, query, response, question_type, turn_number, token_count,
+               NULL AS created_at
         FROM conversations 
         WHERE session_id = %s
         ORDER BY turn_number ASC
@@ -271,7 +274,8 @@ class MemoryDAL:
     def get_recent_conversations(self, cursor, session_id: str, limit: int = 10) -> List[Conversation]:
         """获取最近的对话"""
         sql = """
-        SELECT conversation_id, session_id, query, response, question_type, turn_number, create_at
+        SELECT conversation_id, session_id, query, response, question_type, turn_number, token_count,
+               NULL AS created_at
         FROM conversations 
         WHERE session_id = %s
         ORDER BY turn_number DESC
@@ -288,7 +292,8 @@ class MemoryDAL:
     def search_conversations(self, cursor, session_id: str, keyword: str, limit: int = 50) -> List[Conversation]:
         """搜索对话"""
         sql = """
-        SELECT conversation_id, session_id, query, response, question_type, turn_number, create_at
+        SELECT conversation_id, session_id, query, response, question_type, turn_number, token_count,
+               NULL AS created_at
         FROM conversations 
         WHERE session_id = %s AND (query LIKE %s OR response LIKE %s)
         ORDER BY turn_number DESC

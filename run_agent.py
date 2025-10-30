@@ -106,7 +106,7 @@ class FGOAgent:
         """
         try:
             # 1. 从数据库加载历史对话
-            historical_messages = self.memory.build_langchain_message(self.session_id)
+            historical_messages = await self.memory.build_langchain_message(self.session_id)
             logger.info(f"📚 加载历史消息: {len(historical_messages)} 条")
             
             # 2. 添加当前用户输入

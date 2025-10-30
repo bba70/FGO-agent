@@ -58,8 +58,8 @@ class FGOChunker:
     
     def _chunk_base_info(self, servant_name: str, base_info: Dict[str, str]) -> Dict[str, Any]:
         """切分基础数值（一整块）"""
-        # 语义化前缀：让 embedding 更容易理解这是关于从者的基础信息
-        lines = [f"{servant_name}是一位从者，其基础数值和属性如下：", ""]
+        # 🎯 优化：重复从者名称，增强 Embedding 中的权重
+        lines = [f"{servant_name}是一位从者。{servant_name}的基础数值和属性如下：", ""]
         
         for key, value in base_info.items():
             if value and str(value).strip():
@@ -81,11 +81,11 @@ class FGOChunker:
             # 提取宝具名称用于语义化前缀
             phantasm_name = phantasm.get('宝具名', phantasm.get('宝具名称', f'宝具{i}'))
             
-            # 语义化前缀：自然语言描述
+            # 🎯 优化：重复从者名称，增强 Embedding 中的权重
             if phantasm_name and phantasm_name != f'宝具{i}':
-                lines = [f"{servant_name}的宝具是「{phantasm_name}」，详细信息如下：", ""]
+                lines = [f"{servant_name}的宝具。{servant_name}的宝具是「{phantasm_name}」，详细信息如下：", ""]
             else:
-                lines = [f"{servant_name}的第{i}个宝具，详细信息如下：", ""]
+                lines = [f"{servant_name}的宝具。{servant_name}的第{i}个宝具，详细信息如下：", ""]
             
             for key, value in phantasm.items():
                 if not value:
@@ -136,11 +136,11 @@ class FGOChunker:
                 is_enhanced = skill_data.get('是否强化', '')
                 enhanced_text = f"（{is_enhanced}）" if is_enhanced and '强化' in str(is_enhanced) else ""
                 
-                # 语义化前缀：自然语言描述
+                # 🎯 优化：重复从者名称，增强 Embedding 中的权重
                 if actual_skill_name and actual_skill_name != skill_name:
-                    lines = [f"{servant_name}的{skill_name}是「{actual_skill_name}」{enhanced_text}，详细信息如下：", ""]
+                    lines = [f"{servant_name}的技能。{servant_name}的{skill_name}是「{actual_skill_name}」{enhanced_text}，详细信息如下：", ""]
                 else:
-                    lines = [f"{servant_name}的{skill_name}{enhanced_text}，详细信息如下：", ""]
+                    lines = [f"{servant_name}的技能。{servant_name}的{skill_name}{enhanced_text}，详细信息如下：", ""]
                 
                 for key, value in skill_data.items():
                     if not value or key == '是否强化':  # 跳过空值和已处理的字段
@@ -186,8 +186,11 @@ class FGOChunker:
             ...
         ]
         """
-        # 语义化前缀
-        lines = [f"{servant_name}的培养所需素材如下：", ""]
+        # 🎯 优化：重复从者名称3次，增强 Embedding 中的权重
+        lines = [
+            f"{servant_name}的培养所需素材。{servant_name}的升级素材。{servant_name}需要的材料如下：",
+            ""
+        ]
         
         # materials 是一个列表，每个元素是一个字典
         for material_dict in materials:

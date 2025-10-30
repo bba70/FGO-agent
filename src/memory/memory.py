@@ -1,16 +1,30 @@
 from typing import Optional, List, Dict, Tuple, Any
 from datetime import datetime
+from pathlib import Path
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
-from langchain.chat_models import init_chat_model
 import tiktoken
 
 from database.db.repositories import MemoryDAL
 from database.db.models import User, Session, Conversation, SessionSummary
+from llm.router import ModelRouter
+
+# 全局 ModelRouter 单例
+_router = None
+
+def get_router() -> ModelRouter:
+    """获取 ModelRouter 单例"""
+    global _router
+    if _router is None:
+        project_root = Path(__file__).parent.parent.parent
+        config_path = project_root / "llm" / "config.yaml"
+        _router = ModelRouter(str(config_path))
+    return _router
 
 class MemoryManager:
-    def __init__(self, max_length: int):
+    def __init__(self, max_length: int, router: Optional[ModelRouter] = None):
         self.dal = MemoryDAL()
         self.max_length = max_length
+        self.router = router or get_router()
 
     def ensure_user_exists(self, user_id: str, username: str = None) -> User:
         """
@@ -196,12 +210,8 @@ class MemoryManager:
         """删除指定轮次之后的所有对话"""
         return self.dal.delete_conversations_after_turn(session_id, turn_number)
     
-    def content_compression(self, summary_text: str, recent_conversations: List[Conversation]) -> str:
+    async def content_compression(self, summary_text: str, recent_conversations: List[Conversation]) -> str:
         '''上下文压缩'''
-        model = init_chat_model(
-            "deepseek-chat",
-            temperature=0.5,
-        )
         user_content = f'''
         你是一个专业的对话摘要助手。你的任务是将以下用户与AI助手的对话记录，压缩成一段简洁、连贯的摘要。
 
@@ -211,7 +221,7 @@ class MemoryManager:
         **摘要要求**：
         1. **保留核心信息**：确保所有关键实体（如角色名、技能名）、重要结论、用户的核心意图和AI的关键回答都被包含在内。
         2. **注重连贯性**：将零散的问答整合成一段流畅的、第三人称叙述的文本。
-        3. **忽略闲聊**：省略无关紧要的问候语、确认性回复（如“好的”、“明白了”）和不影响核心事实的闲聊。
+        3. **忽略闲聊**：省略无关紧要的问候语、确认性回复（如"好的"、"明白了"）和不影响核心事实的闲聊。
         4. **简洁明了**：使用尽可能少的文字来概括尽可能多的信息。
 
         **待摘要的对话记录**：
@@ -219,10 +229,15 @@ class MemoryManager:
         {recent_conversations}
         **请生成摘要**：
         '''
-        response = model.invoke(
-            [{"role": "user", "content": user_content}]
+        
+        messages = [{"role": "user", "content": user_content}]
+        result, instance_name, physical_model_name, failover_events = await self.router.chat(
+            messages=messages,
+            model="fgo-chat-model",
+            stream=False,
+            temperature=0.5
         )
-        return response.choices[0].message.content
+        return result['choices'][0]['message']['content']
     
     def token_calculate(self, text: str) -> int:
         '''计算token数量'''
@@ -236,13 +251,14 @@ class MemoryManager:
         token_ids = encoding.encode(text=text)
         return len(token_ids)
     
-    def build_langchain_message(self, session_id: str) -> List[BaseMessage]:
+    async def build_langchain_message(self, session_id: str) -> List[BaseMessage]:
         '''构建langgraph State所需要的message信息'''
         
         summary = self.dal.get_session_summary(session_id)
         start_turn = 0
         messages: List[BaseMessage] = []
         token_count = 0
+        summary_text = ""  # 初始化 summary_text
 
         if summary:
             summary_text = (
@@ -263,7 +279,7 @@ class MemoryManager:
 
         # 如果大于最大长度，做一次上下文压缩
         if token_count > self.max_length:
-            new_summary_text = self.content_compression(summary_text, recent_conversations)
+            new_summary_text = await self.content_compression(summary_text, recent_conversations)
             token_count = self.token_calculate(new_summary_text)
             self.dal.update_summary(session_id, new_summary_text, message_count, token_count)
             return [SystemMessage(content=new_summary_text)]
