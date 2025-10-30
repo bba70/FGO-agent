@@ -94,6 +94,11 @@ class MemoryManager:
         """
         sessions = self.dal.get_user_sessions(user_id, active_only)
         
+        # 🛡️ 防御性检查：如果数据库查询出错，sessions 可能为 None
+        if sessions is None:
+            print(f"⚠️ 警告：获取用户会话失败（数据库错误），返回空列表")
+            return []
+        
         result = []
         for session in sessions:
             # 获取最后一轮对话
@@ -271,6 +276,11 @@ class MemoryManager:
 
         message_count = self.dal.get_message_count(session_id)
         recent_conversations = self.dal.get_conversations_by_turn_range(session_id, start_turn + 1, message_count)
+
+        # 🛡️ 防御性检查：如果数据库查询出错，recent_conversations 可能为 None
+        if recent_conversations is None:
+            print(f"⚠️ 警告：获取对话历史失败（数据库错误），返回摘要或空消息")
+            recent_conversations = []
 
         for conversation in recent_conversations:
             messages.append(HumanMessage(content=conversation.query))

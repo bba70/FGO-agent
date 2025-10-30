@@ -248,17 +248,22 @@ async def _get_session_history_impl(session_id: str, limit: int = 50):
         # 使用正确的方法名：get_conversation_history
         conversations = memory.get_conversation_history(session_id, limit=limit)
         
+        # 🛡️ 防御性检查：如果数据库查询出错，conversations 可能为 None
+        if conversations is None:
+            logger.warning(f"⚠️ 数据库查询返回 None（可能发生错误），返回空列表")
+            return []
+        
         # 转换为响应模型（Conversation 对象转为两条消息：query 和 response）
         conversation_list = []
         for conv in conversations:
             # conv 是 Conversation 对象，有 query 和 response 两个字段
-            # 数据库中没有 created_at 字段，使用当前时间作为默认值
-            created_at = conv.created_at
-            if isinstance(created_at, datetime):
-                created_at = created_at.isoformat()
-            elif created_at is None:
+            # 处理 create_at 字段（转换为 ISO 格式字符串）
+            create_at = conv.create_at
+            if isinstance(create_at, datetime):
+                create_at = create_at.isoformat()
+            elif create_at is None:
                 # 如果没有时间戳，使用当前时间
-                created_at = datetime.now().isoformat()
+                create_at = datetime.now().isoformat()
             
             # 添加用户消息（query）
             if conv.query:
@@ -266,7 +271,7 @@ async def _get_session_history_impl(session_id: str, limit: int = 50):
                     conversation_id=conv.conversation_id,
                     role="user",
                     content=conv.query,
-                    created_at=created_at,
+                    created_at=create_at,
                     question_type=conv.question_type
                 ))
             
@@ -276,7 +281,7 @@ async def _get_session_history_impl(session_id: str, limit: int = 50):
                     conversation_id=conv.conversation_id,
                     role="assistant",
                     content=conv.response,
-                    created_at=created_at,
+                    created_at=create_at,
                     question_type=conv.question_type
                 ))
         

@@ -67,7 +67,6 @@ class MemoryDAL:
 
     @use_sync_connection(is_query=True, dictionary_cursor=True)
     def get_session_by_id(self, cursor, session_id: str) -> Optional[Session]:
-        print('session_id', session_id)
         """根据ID获取会话"""
         sql = """
         SELECT session_id, user_id, session_name, last_active, is_active, message_count
@@ -190,7 +189,7 @@ class MemoryDAL:
         """根据ID获取对话"""
         sql = """
         SELECT conversation_id, session_id, query, response, question_type, turn_number, token_count,
-               NULL AS created_at
+               create_at
         FROM conversations WHERE conversation_id = %s
         """
         cursor.execute(sql, (conversation_id,))
@@ -204,7 +203,7 @@ class MemoryDAL:
         """获取指定轮次范围的对话"""
         sql = """
         SELECT conversation_id, session_id, query, response, question_type, turn_number, token_count,
-               NULL AS created_at
+               create_at
         FROM conversations 
         WHERE session_id = %s AND turn_number BETWEEN %s AND %s
         ORDER BY turn_number ASC
@@ -229,7 +228,7 @@ class MemoryDAL:
         """获取指定类型的对话"""
         sql = """
         SELECT conversation_id, session_id, query, response, question_type, turn_number, token_count,
-               NULL AS created_at
+               create_at
         FROM conversations 
         WHERE session_id = %s AND question_type = %s
         ORDER BY turn_number ASC
@@ -253,7 +252,7 @@ class MemoryDAL:
         """获取会话的所有对话"""
         sql = """
         SELECT conversation_id, session_id, query, response, question_type, turn_number, token_count,
-               NULL AS created_at
+               create_at
         FROM conversations 
         WHERE session_id = %s
         ORDER BY turn_number ASC
@@ -275,7 +274,7 @@ class MemoryDAL:
         """获取最近的对话"""
         sql = """
         SELECT conversation_id, session_id, query, response, question_type, turn_number, token_count,
-               NULL AS created_at
+               create_at
         FROM conversations 
         WHERE session_id = %s
         ORDER BY turn_number DESC
@@ -293,7 +292,7 @@ class MemoryDAL:
         """搜索对话"""
         sql = """
         SELECT conversation_id, session_id, query, response, question_type, turn_number, token_count,
-               NULL AS created_at
+               create_at
         FROM conversations 
         WHERE session_id = %s AND (query LIKE %s OR response LIKE %s)
         ORDER BY turn_number DESC
@@ -346,7 +345,7 @@ class MemoryDAL:
     def get_session_summary(self, cursor, session_id: str) -> Optional[SessionSummary]:
         """获取会话摘要"""
         sql = """
-        SELECT session_id, summary_text, turn_number, last_summary_time
+        SELECT session_id, summary_text, turn_number, last_summary_time, token_count
         FROM summary WHERE session_id = %s
         """
         cursor.execute(sql, (session_id,))

@@ -90,7 +90,7 @@ class Conversation:
     query: Optional[str] = None
     response: Optional[str] = None
     question_type: Optional[str] = None
-    created_at: Optional[datetime] = None
+    create_at: Optional[datetime] = None
     turn_number: int = 0
     token_count: int = 0
     
@@ -103,7 +103,7 @@ class Conversation:
             query=data.get('query'),
             response=data.get('response'),
             question_type=data.get('question_type', 'general'),
-            created_at=parse_datetime(data.get('created_at')),
+            create_at=parse_datetime(data.get('create_at')),
             turn_number=int(data.get('turn_number', 0)),
             token_count=int(data.get('token_count', 0))
         )
@@ -116,7 +116,7 @@ class Conversation:
             'query': self.query,
             'response': self.response,
             'question_type': self.question_type.value if self.question_type else None,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'create_at': self.create_at.isoformat() if self.create_at else None,
             'turn_number': self.turn_number,
             'token_count': self.token_count
         }
