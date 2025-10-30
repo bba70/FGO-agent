@@ -136,7 +136,7 @@ class SessionSummary:
         return cls(
             session_id=data.get('session_id'),
             summary_text=data.get('summary_text'),
-            turn_number=int(data.get('turned_number', 0)),  # 数据库字段是turned_number
+            turn_number=int(data.get('turn_number', 0)),  # 数据库字段是 turn_number
             last_summary_time=parse_datetime(data.get('last_summary_time')),
             token_count=int(data.get('token_count', 0))
         )
@@ -146,7 +146,7 @@ class SessionSummary:
         return {
             'session_id': self.session_id,
             'summary_text': self.summary_text,
-            'turned_number': self.turn_number,
+            'turn_number': self.turn_number,
             'last_summary_time': self.last_summary_time.isoformat() if self.last_summary_time else None,
             'token_count': self.token_count
         }

@@ -332,11 +332,12 @@ class MemoryDAL:
         current_time = datetime.now(timezone.utc)
         sql = """
         INSERT INTO summary (session_id, summary_text, turn_number, last_summary_time, token_count)
-        VALUES (%s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             summary_text = VALUES(summary_text),
             turn_number = VALUES(turn_number),
-            last_summary_time = VALUES(last_summary_time)
+            last_summary_time = VALUES(last_summary_time),
+            token_count = VALUES(token_count)
         """
         cursor.execute(sql, (session_id, summary_text, turn_number, current_time, token_count))
         return cursor.rowcount > 0

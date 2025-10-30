@@ -291,7 +291,8 @@ class MemoryManager:
         if token_count > self.max_length:
             new_summary_text = await self.content_compression(summary_text, recent_conversations)
             token_count = self.token_calculate(new_summary_text)
-            self.dal.update_summary(session_id, new_summary_text, message_count, token_count)
+            # 🎯 使用 create_or_update_summary 而不是 update_summary（可以自动创建）
+            self.dal.create_or_update_summary(session_id, new_summary_text, message_count, token_count)
             return [SystemMessage(content=new_summary_text)]
         return messages
     
